@@ -1,0 +1,4442 @@
+---
+title: "Initial Analyses"
+author: "Will Schulz"
+date: "2023-08-21"
+output: html_document
+---
+
+
+```{r}
+run_stan = T
+set.seed(4711)
+
+```
+
+
+```{r}
+library(tidyverse)
+library(haven)
+library(pewmethods)
+library(rstan)
+library(stargazer)
+#library(imager)
+library(progress)
+```
+
+
+
+# Appendix A Stuff
+
+
+```{r}
+d_591 <- read_csv(file="../data/591_exploratory.csv")[-c(1:2),] %>% filter(consentStatement=="I would like to participate." & Status!="Survey Preview")
+
+d_591$ideology <- d_591$postIdeoL
+d_591$ideology[which(is.na(d_591$ideology))] <- d_591$postIdeoC[which(is.na(d_591$ideology))]
+
+
+d_591 <- d_591 %>% mutate(ideology = case_when(ideology == "Very Liberal" ~ -2,
+                                               ideology == "Liberal" ~ -1,
+                                               ideology == "Moderate" ~ 0,
+                                               ideology == "Conservative" ~ 1,
+                                               ideology == "Very Conservative" ~ 2),
+                          polInt = case_when(Q59 == "Not interested at all" ~ -2,
+                                             Q59 == "Slightly interested" ~ -1,
+                                             Q59 == "Moderately interested" ~ 0,
+                                             Q59 == "Interested" ~ 1,
+                                             Q59 == "Very interested" ~ 2),
+                          strongDem = case_when(Q56 == "Not very strong Democrat" ~ 0,
+                                                Q56 == "Strong Democrat" ~ 1),
+                          mainSM = case_when(str_detect(string = whichSM, pattern = "Twitter|Facebook|Instagram") ~ 1,
+                                             str_detect(string = whichSM, pattern = "Twitter|Facebook|Instagram", negate = T) ~ 0)
+)
+
+d_591 <- d_591 %>% drop_na(ideology, mainSM, youPartisan, othersPartisan)
+d_591 <- d_591 %>% filter(mainSM==1)
+
+d_591
+```
+
+
+
+```{r}
+# careOrder <- c("Don't care at all","Care a little bit","Care somewhat","Care a great deal")
+# likelyOrder <- c("Much more likely","Somewhat more likely","Neither more likely nor less likely","Somewhat less likely","Much less likely")
+partisanOrder <- c("Much less partisan on social media","Somewhat less partisan on social media","Neither more nor less partisan on social media","Somewhat more partisan on social media","Much more partisan on social media")
+# 
+# toplot <- d_591 %>% select(You=youPartisan, Others=othersPartisan) %>% gather(key = items, value = Answer) %>% mutate(Answer=factor(Answer, levels=partisanOrder))
+# toplot <- toplot %>% group_by(items) %>% summarise(more_partisan = mean(Answer %in% c("Somewhat more partisan on social media", "Much more partisan on social media")))
+# 
+# pdf(file = "../results/591_partisan_base.pdf", width = 8.25, height = 4.5)
+# par(mar = c(5.1, 6.1, 2.1, 4.1))
+# barplot(more_partisan ~ items, data = toplot, xlab = "Third/First-Person Wording", ylab = "Much + Somewhat MORE Partisan Online", ylim = c(0,1), space = 1, main = "Do You/Others Act More/Less Partisan Online Than Off?", border = NA)
+# dev.off()
+# 
+# toplot
+```
+
+
+```{r}
+short_xlab_names_591= c("Much\nLess","Somewhat\nLess","Neither","Somewhat\nMore","Much\nMore")
+
+w_appendix_hists = 6
+h_appendix_hists = 4
+
+pdf("../results/591_partisanhist_others.pdf", width = w_appendix_hists, height = h_appendix_hists)
+d_591 %>% select(You=youPartisan, Others=othersPartisan) %>% gather(key = items, value = Answer) %>% mutate(Answer=factor(Answer, levels=partisanOrder)) %>% group_by(items, Answer) %>% summarize(count=n()) %>% filter(items=="Others") %>% ungroup() %>% pull(count, Answer) %>% {./sum(.)}  %>% barplot(height =., main = "", names.arg = short_xlab_names_591)
+dev.off()
+
+pdf("../results/591_partisanhist_you.pdf", width = w_appendix_hists, height = h_appendix_hists)
+d_591 %>% select(You=youPartisan, Others=othersPartisan) %>% gather(key = items, value = Answer)%>% mutate(Answer=factor(Answer, levels=partisanOrder)) %>% group_by(items, Answer) %>% summarize(count=n()) %>% filter(items=="You") %>% ungroup() %>% pull(count, Answer) %>% {./sum(.)} %>% barplot(height =., main = "", names.arg = short_xlab_names_591)
+dev.off()
+
+```
+
+
+# Read In Raw Data
+
+```{r}
+raw_data <- read_sav("../data/9089.121_TESS_Schulz_FinalData_Updated.sav")
+
+sa_num_raw <- raw_data %>% select(starts_with("Q6")) %>% as.matrix
+
+#drop NA rows
+rowmean_na <- (apply(sa_num_raw, MARGIN = 1, FUN = function(x){mean(is.na(x))}))
+#unique(rowmean_na)
+
+rows_todrop <- which(rowmean_na!=0)
+raw_data <- raw_data[-rows_todrop,]
+sa_num_raw <- sa_num_raw[-rows_todrop,]
+```
+
+
+# Look at Stuff for Explaining Procedure
+
+## Process Q1 and Q2
+
+Q1: Do you use any of the following social media platforms?
+
+GRID ITEMS, RANDOMIZE:
+A.	Facebook
+B.	Snapchat
+C.	TikTok
+D.	Instagram
+E.	WhatsApp
+F.	Discord
+G.	Twitter
+H.	YouTube
+I.	BeReal
+J.	Mastodon
+
+RESPONSE OPTIONS:
+01	Yes
+02	No
+
+
+Q2: "Do you use any of the following social media platforms to post your opinions about politics or current events?"
+
+[CAWI - REMOVE BOLD] <i> Please select all that apply. </i>
+[CATI] SELECT ALL THAT APPLY.
+
+GRID ITEMS:
+1.	[SHOW IF Q1A=1] Facebook
+2.	[SHOW IF Q1B=1] Snapchat
+3.	[SHOW IF Q1C=1] TikTok
+4.	[SHOW IF Q1D=1] Instagram
+5.	[SHOW IF Q1E=1] WhatsApp
+6.	[SHOW IF Q1F=1] Discord
+7.	[SHOW IF Q1G=1] Twitter
+8.	[SHOW IF Q1H=1] YouTube
+9.	[SHOW IF Q1I=1] BeReal
+10.	[SHOW IF Q1J=1] Mastodon
+
+
+RESPONSE OPTIONS:
+1.	Yes
+2.	 No
+
+
+```{r}
+q1_platforms <- c("Facebook", "Snapchat", "TikTok", "Instagram", "WhatsApp", "Discord", "Twitter", "YouTube", "BeReal", "Mastodon")
+
+```
+
+
+```{r}
+# Use mutate_at with case_when
+raw_data <- raw_data %>%
+  mutate_at(
+    vars(starts_with("Q1")),
+    funs(
+      case_when(
+        . == 1 ~ TRUE,      # If the value is >= 30, double it
+        . == 2 ~ FALSE, # If the value is between 20 and 29 (inclusive), keep it as is
+        ! . %in% c(1,2) ~ NA      # Otherwise, set it to NA
+      )
+    )
+  )
+
+
+raw_data <- raw_data %>%
+  mutate_at(
+    vars(starts_with("Q2")),
+    funs(
+      case_when(
+        . == 1 ~ TRUE,      # If the value is >= 30, double it
+        . == 2 ~ FALSE, # If the value is between 20 and 29 (inclusive), keep it as is
+        ! . %in% c(1,2) ~ NA      # Otherwise, set it to NA
+      )
+    )
+  )
+
+colnames(raw_data)[which(str_starts(string = colnames(raw_data), pattern = "Q1"))] <- paste0("use_",q1_platforms)
+
+q2_platforms <- q1_platforms
+
+colnames(raw_data)[which(str_starts(string = colnames(raw_data), pattern = "Q2"))] <- paste0("post_",q2_platforms)
+
+raw_data
+```
+
+
+```{r}
+# raw_data %>% filter(use_Twitter) %>% select(post_Twitter)
+# 
+# raw_data %>% filter(!use_Twitter) %>% select(post_Twitter)
+# 
+# 
+# raw_data %>% filter(use_Twitter|use_Facebook) %>% select(starts_with("post_"))
+
+```
+
+
+DOV_ASSIGNED:
+1 FB Poster
+2 FB Lurker
+3 TW Poster
+4 TW Lurker
+
+
+```{r}
+# raw_data %>% filter(use_Facebook & post_Facebook) %>% select(starts_with("DOV_"))
+# raw_data %>% filter(use_Facebook & !post_Facebook) %>% select(starts_with("DOV_"))
+# 
+# 
+# raw_data %>% filter(use_Twitter & post_Twitter) %>% select(starts_with("DOV_"))
+# raw_data %>% filter(use_Facebook & !post_Facebook) %>% select(starts_with("DOV_"))
+
+```
+
+
+
+```{r}
+raw_data <- raw_data %>%
+  mutate_at(
+    vars(starts_with("DOV_")),
+    funs(
+      as.numeric(.)
+    )
+  )
+
+raw_data <- raw_data %>%
+  mutate_at(
+    vars(starts_with("DOV_ELIG_")),
+    funs(
+      as.logical(.)
+    )
+  )
+
+```
+
+```{r}
+fb_logocolor = "#4267B2"
+tw_logocolor = "#1DA1F2"
+
+ch3_colors_fbtwlposterlurker <- c("fb_poster" = fb_logocolor, "fb_lurker" = adjustcolor(fb_logocolor, alpha = .5), "tw_poster" = tw_logocolor,"tw_lurker" =  adjustcolor(tw_logocolor, alpha = .5))
+```
+
+
+```{r}
+raw_data %>% filter(DOV_ELIG_1) %>% pull(DOV_ASSIGNED) %>% {.==1} %>% mean #FB Poster
+raw_data %>% filter(DOV_ELIG_2) %>% pull(DOV_ASSIGNED) %>% {.==2} %>% mean #FB Lurker
+raw_data %>% filter(DOV_ELIG_3) %>% pull(DOV_ASSIGNED) %>% {.==3} %>% mean #TW Poster
+raw_data %>% filter(DOV_ELIG_4) %>% pull(DOV_ASSIGNED) %>% {.==4} %>% mean #TW Lurker
+
+```
+
+
+```{r}
+# pies: assignment by eligibility
+
+d_to_summarise_assignment <- raw_data %>% mutate(DOV_ASSIGNED = fct_case_when(DOV_ASSIGNED == 1 ~ "Facebook Poster",
+                                                                              DOV_ASSIGNED == 2 ~ "Facebook Lurker",
+                                                                              DOV_ASSIGNED == 3 ~ "Twitter Poster",
+                                                                              DOV_ASSIGNED == 4 ~ "Twitter Lurker")) %>%
+  group_by(DOV_ASSIGNED) %>% summarise(elig_fbposter = sum(DOV_ELIG_1==1),
+                                       elig_fblurker = sum(DOV_ELIG_2==1),
+                                       elig_twposter = sum(DOV_ELIG_3==1),
+                                       elig_twlurker = sum(DOV_ELIG_4==1)
+  )
+
+elig_fbposter_assignment <- d_to_summarise_assignment %>% {setNames(.$elig_fbposter, if_else(.$elig_fbposter>0, .$DOV_ASSIGNED, ""))}
+elig_fblurker_assignment <- d_to_summarise_assignment %>% {setNames(.$elig_fblurker, if_else(.$elig_fblurker>0, .$DOV_ASSIGNED, ""))}
+elig_twposter_assignment <- d_to_summarise_assignment %>% {setNames(.$elig_twposter, if_else(.$elig_twposter>0, .$DOV_ASSIGNED, ""))}
+elig_twlurker_assignment <- d_to_summarise_assignment %>% {setNames(.$elig_twlurker, if_else(.$elig_twlurker>0, .$DOV_ASSIGNED, ""))}
+
+par(mfrow=c(1,4))
+elig_fbposter_assignment %>% pie(main = "Eligible Facebook Posters",
+                                 col = ch3_colors_fbtwlposterlurker)
+elig_fblurker_assignment %>% pie(main = "Eligible Facebook Lurkers",
+                                 col = ch3_colors_fbtwlposterlurker)
+elig_twposter_assignment %>% pie(main = "Eligible Twitter Posters",
+                                 col = ch3_colors_fbtwlposterlurker)
+elig_twlurker_assignment %>% pie(main = "Eligible Twitter Lurkers",
+                                 col = ch3_colors_fbtwlposterlurker)
+```
+
+
+
+
+
+```{r}
+# # pies: eligibility by assignment
+# 
+# d_to_summarise_assignment2 <- d_to_summarise_assignment %>% select(starts_with("elig_")) %>% t
+# colnames(d_to_summarise_assignment2) <- gsub(pattern = " ", replacement = "_",d_to_summarise_assignment$DOV_ASSIGNED)
+# d_to_summarise_assignment2 <- as.data.frame(d_to_summarise_assignment2) %>% mutate(eligibility = d_to_summarise_assignment$DOV_ASSIGNED, .before = 0)
+# 
+# d_to_summarise_assignment2$
+# 
+# ass_fbposter_eligibility <- d_to_summarise_assignment2 %>% {setNames(.$Facebook_Poster, if_else(.$Facebook_Poster>0, .$eligibility, ""))}
+# ass_fblurker_eligibility <- d_to_summarise_assignment2 %>% {setNames(.$Facebook_Lurker, if_else(.$Facebook_Lurker>0, .$eligibility, ""))}
+# ass_twposter_eligibility <- d_to_summarise_assignment2 %>% {setNames(.$Twitter_Poster, if_else(.$Twitter_Poster>0, .$eligibility, ""))}
+# ass_twlurker_eligibility <- d_to_summarise_assignment2 %>% {setNames(.$Twitter_Lurker, if_else(.$Twitter_Lurker>0, .$eligibility, ""))}
+# 
+# par(mfrow=c(1,4))
+# ass_fbposter_eligibility %>% pie(main = "Assigned Facebook Posters",
+#                                  col = ch3_colors_fbtwlposterlurker)
+# ass_fblurker_eligibility %>% pie(main = "Assigned Facebook Lurkers",
+#                                  col = ch3_colors_fbtwlposterlurker)
+# ass_twposter_eligibility %>% pie(main = "Assigned Twitter Posters",
+#                                  col = ch3_colors_fbtwlposterlurker)
+# ass_twlurker_eligibility %>% pie(main = "Assigned Twitter Lurkers",
+#                                  col = ch3_colors_fbtwlposterlurker)
+```
+
+
+
+
+```{r}
+library(eulerr)
+
+```
+
+
+
+
+```{r}
+raw_data %>%
+  filter(DOV_ELIG_1==1) %>%
+  transmute(assigned_fb_poster = DOV_ASSIGNED==1, elig_tw_poster = DOV_ELIG_3, elig_tw_lurker = DOV_ELIG_4) %>%
+  #transmute(assigned, num_range("DOV_ELIG_", range = c(3,4))) %>%
+  euler() %>% plot(., quantities = TRUE, fills = c(adjustcolor("gray", alpha = .5), ch3_colors_fbtwlposterlurker["tw_poster"], ch3_colors_fbtwlposterlurker["tw_lurker"]), edges = c(ch3_colors_fbtwlposterlurker["fb_poster"], NA, NA))
+
+```
+
+
+
+```{r}
+#par(mfrow = c(1,4))
+
+loss = "abs"
+
+euler_size = 5
+
+pdf("../results/euler_fbposter.pdf", width = euler_size, height = euler_size)
+raw_data %>%
+  filter(DOV_ELIG_1==1) %>% #filter for eligibility for current assignment
+  transmute(assigned_fb_poster = DOV_ASSIGNED==1, elig_tw_poster = DOV_ELIG_3, elig_tw_lurker = DOV_ELIG_4) %>%
+  #transmute(assigned, num_range("DOV_ELIG_", range = c(3,4))) %>%
+  euler(loss = loss) %>% plot(., quantities = TRUE, fills = c(adjustcolor("gray", alpha = 0), ch3_colors_fbtwlposterlurker["tw_poster"], ch3_colors_fbtwlposterlurker["tw_lurker"]), edges = c(ch3_colors_fbtwlposterlurker["fb_poster"], NA, NA), legend = T)
+dev.off()
+
+pdf("../results/euler_fblurker.pdf", width = euler_size, height = euler_size)
+raw_data %>%
+  filter(DOV_ELIG_2==1) %>%
+  transmute(assigned_fb_lurker = DOV_ASSIGNED==2, elig_tw_poster = DOV_ELIG_3, elig_tw_lurker = DOV_ELIG_4) %>%
+  #transmute(assigned, num_range("DOV_ELIG_", range = c(3,4))) %>%
+  euler(loss = loss) %>% plot(., quantities = TRUE, fills = c(adjustcolor("gray", alpha = 0), ch3_colors_fbtwlposterlurker["tw_poster"], ch3_colors_fbtwlposterlurker["tw_lurker"]), edges = c(ch3_colors_fbtwlposterlurker["fb_lurker"], NA, NA), legend = T)
+dev.off()
+
+pdf("../results/euler_twposter.pdf", width = euler_size, height = euler_size)
+raw_data %>%
+  filter(DOV_ELIG_3==1) %>%
+  transmute(assigned_tw_poster = DOV_ASSIGNED==3, elig_fb_poster = DOV_ELIG_1, elig_fb_lurker = DOV_ELIG_2) %>%
+  #transmute(assigned, num_range("DOV_ELIG_", range = c(3,4))) %>%
+  euler(loss = loss) %>% plot(., quantities = TRUE, fills = c(adjustcolor("gray", alpha = 0), ch3_colors_fbtwlposterlurker["fb_poster"], ch3_colors_fbtwlposterlurker["fb_lurker"]), edges = c(ch3_colors_fbtwlposterlurker["tw_poster"], NA, NA), legend = T)
+dev.off()
+
+pdf("../results/euler_twlurker.pdf", width = euler_size, height = euler_size)
+raw_data %>%
+  filter(DOV_ELIG_4==1) %>%
+  transmute(assigned_tw_lurker = DOV_ASSIGNED==4, elig_fb_poster = DOV_ELIG_1, elig_fb_lurker = DOV_ELIG_2) %>%
+  #transmute(assigned, num_range("DOV_ELIG_", range = c(3,4))) %>%
+  euler(loss = loss) %>% plot(., quantities = TRUE, fills = c(NA, ch3_colors_fbtwlposterlurker["fb_poster"], ch3_colors_fbtwlposterlurker["fb_lurker"]), edges = c(ch3_colors_fbtwlposterlurker["tw_lurker"], NA, NA), legend = T)
+dev.off()
+
+
+```
+
+
+# Other Processing
+
+
+
+## Check for NAs
+
+
+```{r}
+raw_data
+
+```
+
+
+
+```{r}
+raw_data %>% filter(QUAL==1) %>% pull(PartyID7) %>% {mean(is.na(.))}
+```
+
+
+
+
+```{r}
+all_colnames <- colnames(raw_data)
+na_rate <- c()
+
+for (i in 1:length(all_colnames)){
+  na_rate[i] <- mean(is.na(raw_data[all_colnames[i]]))
+}
+names(na_rate) <- all_colnames
+
+sort(na_rate, decreasing = T)
+
+#na_rate[which(na_rate>.1)]
+```
+
+
+## Clean and Process the Data
+
+```{r}
+## Replace 98s with NA
+#sa_num_raw
+sa_num_raw[which(sa_num_raw == 98, arr.ind = T)] <- NA
+
+
+rowmean_na <- (apply(sa_num_raw, MARGIN = 1, FUN = function(x){mean(is.na(x))}))
+unique(rowmean_na)
+
+any(rowmean_na == 1) #good
+```
+
+
+```{r}
+# rearrange for phrase randomization
+raw_data
+
+randomized_phrases_randomization <- raw_data %>% select(starts_with("P_PHRASE_"))
+
+phrases <- c("Black lives matter",
+"abortion is healthcare",
+"cis-gender",
+"privilege",
+"climate crisis",
+"toxic masculinity",
+"defund the police",
+"equity",
+"empathy",
+"micro-aggression",
+"safe space",
+"POC",
+"words matter",
+"eat the rich",
+"mansplain",
+"heteronormative",
+"voter suppression",
+"all lives matter",
+"sanctity of life",
+"reverse racism",
+"libtard",
+"patriot",
+"illegal alien",
+"traditional values",
+"blue lives matter",
+"mainstream media",
+"thug",
+"do your own research",
+"MAGA",
+"free speech",
+"cancel culture",
+"personal responsibility",
+"biological women",
+"voter fraud")
+
+randomized_phrases_indices <- data.frame(index = 7:40, phrase = phrases)
+
+fixed_phrases_indices <- data.frame(index = 1:6, phrase = c("systemic racism", "big government", "human rights", "America first", "LatinX", "snowflake"))
+
+```
+
+
+```{r}
+# create organized grid
+
+sa_num <- matrix(NA, nrow = nrow(sa_num_raw), ncol = 40, dimnames = list(rows = raw_data$CaseId, cols = c(fixed_phrases_indices$phrase, randomized_phrases_indices$phrase)))
+
+for (i in 1:6){
+  sa_num[,i] <- sa_num_raw[,i]
+}
+
+#sa_num
+
+#randomized_phrases_randomization
+
+for (i in 1:nrow(randomized_phrases_randomization)){
+  sa_num[i,unlist(randomized_phrases_randomization[i,])] <- sa_num_raw[i,7:20]
+}
+
+#sa_num
+
+sa_num <- 4-sa_num
+#saveRDS(sa_num, "tess_sa_num.rds")
+```
+
+```{r}
+
+```
+
+
+
+# Clean Rest of Survey
+
+```{r}
+raw_data$Q6A
+```
+
+
+DOV_ASSIGNED:
+1 FB Poster
+2 FB Lurker
+3 TW Poster
+4 TW Lurker
+
+```{r}
+data <- raw_data %>%
+  select(-starts_with("P_PHRASE_")) %>%
+  select(-starts_with("Q6")) %>%
+  mutate(primary_platform = case_when(DOV_ASSIGNED %in% c(1,2) ~ "fb",
+                                      DOV_ASSIGNED %in% c(3,4) ~ "tw"),
+         poster = case_when(DOV_ASSIGNED %in% c(1,3) ~ TRUE,
+                            DOV_ASSIGNED %in% c(2,4) ~ FALSE),
+         platform_treatment = case_when(DOV_CONTEXT == 1 ~ 0,
+                                        DOV_CONTEXT %in% c(2,3) ~ 1)) %>%
+  mutate(relsim_fb = case_when(Q4 %in% 1:5 ~ Q4),
+         relsim_tw = case_when(Q5 %in% 1:5 ~ Q5)) %>%
+  dplyr::rename(acct_shows_name = Q7_1,
+                acct_shows_face = Q7_2,
+                acct_vis_rwf = Q7_3,
+                acct_vis_fam = Q7_4,
+                acct_vis_work = Q7_5)
+
+data$IDEO[which(data$IDEO==-1)] <- NA
+data$PartyID7[which(data$PartyID7==-1)] <- NA
+data$GENDER[which(data$GENDER==0)] <- NA
+data$AGE4[which(data$AGE4==99)] <- NA
+data$AGE7[which(data$AGE7==99)] <- NA
+
+data <- data %>% 
+  mutate(male = (GENDER==1),
+         poc = (RACETHNICITY!=1),
+         college = (EDUC5>=4))
+
+data
+
+data$relsim <- NA
+data$relsim[which(!is.na(data$relsim_fb))] <- data$relsim_fb[which(!is.na(data$relsim_fb))]
+data$relsim[which(!is.na(data$relsim_tw))] <- data$relsim_fb[which(!is.na(data$relsim_tw))]
+
+
+data$relsim_trin <- case_when(data$relsim < 3 ~ (-1),
+                             data$relsim == 3 ~ (0),
+                             data$relsim > 3 ~ (1))
+
+hist(data$relsim_trin)
+
+data <- data %>%
+  mutate(age_dec = AGE/10)
+
+#saveRDS(data, "tess_data.rds")
+```
+
+
+# Estimate Wordsticks
+
+```{r}
+indexer <- function(x,y){
+  return(which(y == x))
+}
+
+prep_stan_data <- function(input, drop_na = TRUE){
+  library(reshape)
+  people <- unique(rownames(input))
+  items <- unique(colnames(input)) %>% sort
+  input_df <- as.data.frame(input) %>% mutate(id = rownames(input))
+  input_melted <- melt(input_df, id.vars = "id") %>% mutate(variable=as.character(variable))
+  if(drop_na==TRUE){input_melted <- input_melted %>% drop_na()}
+  input_melted <- input_melted %>% mutate(person_index = NA,item_index = NA)
+  for (i in 1:nrow(input_melted)) {
+    input_melted$person_index[i] <- indexer(input_melted$id[i], people)
+    input_melted$item_index[i] <- indexer(input_melted$variable[i], items)
+  }
+  return(input_melted)
+}
+```
+
+
+```{r}
+# 4 point estimation prep
+sa_4point <- sa_num
+
+melted <- prep_stan_data(sa_4point)
+person_metadata <- data %>% mutate(person_index = 1:nrow(.))
+melted <- left_join(melted, person_metadata)
+
+melted$value <- melted$value + 1
+
+#set up initial values
+statements <- colnames(sa_4point)
+statements_tomatch <- tolower(statements)
+
+sa_sdi_cor <- apply(sa_4point, MARGIN = 2, FUN = function(x) return(cor(x, person_metadata$IDEO, use = "complete.obs")))
+
+sa_colmeans <- sa_4point %>% colMeans(na.rm = T) %>% scale %>% as.vector
+hist(sa_colmeans)
+
+sa_rowmeans <- sa_4point %>% rowMeans(na.rm = T) %>% scale %>% as.vector
+hist(sa_rowmeans)
+any(is.na(sa_rowmeans))
+
+scaled_ideology <- person_metadata$IDEO %>% scale %>% as.vector
+hist(scaled_ideology)
+
+scaled_ideology[which(is.na(scaled_ideology))] <- 0
+
+if (run_stan) {
+  init_1 <- function(chain_id) {
+    list(gamma = sa_sdi_cor,
+         beta = sa_rowmeans,
+         alpha_raw = scaled_ideology)
+  }
+  
+  
+  stan_dat <- list(say = melted$value,
+                   subj = melted$person_index,
+                   item = melted$item_index,
+                   J = nlevels(as.factor(melted$person_index)),
+                   K = nlevels(as.factor(melted$item_index)),
+                   N = nrow(melted),
+                   fixright = which(colnames(sa_4point) == "America first"))
+  
+  chains = 4
+  stan_iter = 2500
+  options(mc.cores = chains)
+  stan_fit <- stan("wordsticks.stan",
+                       data = stan_dat,
+                       init = init_1,
+                       chains = chains, iter = stan_iter)
+  saveRDS(stan_fit, "../results/wordsticks_fit.rds")
+} else {
+  stan_fit <- readRDS("../results/wordsticks_fit.rds")
+}
+
+```
+
+
+```{r}
+alpha_samples <- rstan::extract(stan_fit, pars = c("alpha"), permuted=T, inc_warmup = F)$alpha %>% t
+beta_samples <- rstan::extract(stan_fit, pars = c("beta"), permuted=T, inc_warmup = F)$beta %>% t
+
+```
+
+
+```{r}
+d_final <- data %>% mutate(alpha = apply(alpha_samples, MARGIN = 1, FUN = median), beta = apply(beta_samples, MARGIN = 1, FUN = median))
+d_final #use for treatment effects, benchmarking
+
+```
+
+## Prep Data for Stickplots
+
+
+```{r}
+#alpha_samples <- rstan::extract(stan_fit, pars = c("alpha"), permuted=T, inc_warmup = F)$alpha %>% t
+
+phrase_index <- melted %>% distinct(item_index, .keep_all = T) %>% arrange(item_index) %>% pull(variable)
+
+#alpha_samples <- rstan::extract(stan_fit, pars = c("alpha"), permuted=T, inc_warmup = F)$alpha %>% t
+#beta_samples <- rstan::extract(stan_fit, pars = c("beta"), permuted=T, inc_warmup = F)$beta %>% t
+gamma_samples <- rstan::extract(stan_fit, pars = c("gamma"), permuted=T, inc_warmup = F)$gamma %>% t
+
+rownames(gamma_samples) <- phrase_index
+#d3_A_samples <- rstan::extract(stan_fit, pars = c("d3_A"), permuted=T, inc_warmup = F)$d3_A %>% t
+#rownames(d3_A_samples) <- phrase_index_3point
+#d3_B_samples <- rstan::extract(stan_fit, pars = c("d3_B"), permuted=T, inc_warmup = F)$d3_B %>% t
+#rownames(d3_B_samples) <- phrase_index_3point
+d4_A_samples <- rstan::extract(stan_fit, pars = c("d4_A"), permuted=T, inc_warmup = F)$d4_A %>% t
+rownames(d4_A_samples) <- phrase_index
+d4_B_samples <- rstan::extract(stan_fit, pars = c("d4_B"), permuted=T, inc_warmup = F)$d4_B %>% t
+rownames(d4_B_samples) <- phrase_index
+d4_C_samples <- rstan::extract(stan_fit, pars = c("d4_C"), permuted=T, inc_warmup = F)$d4_C %>% t
+rownames(d4_C_samples) <- phrase_index
+
+#ct3_1_samples <- rstan::extract(stan_fit, pars = c("c3_transformed_1"), permuted=T, inc_warmup = F)$c3_transformed_1 %>% t
+#ct3_2_samples <- rstan::extract(stan_fit, pars = c("c3_transformed_2"), permuted=T, inc_warmup = F)$c3_transformed_2 %>% t
+#rownames(ct3_1_samples) <- phrase_index_3point
+#rownames(ct3_2_samples) <- phrase_index_3point
+
+ct4_1_samples <- rstan::extract(stan_fit, pars = c("c4_transformed_1"), permuted=T, inc_warmup = F)$c4_transformed_1 %>% t
+ct4_2_samples <- rstan::extract(stan_fit, pars = c("c4_transformed_2"), permuted=T, inc_warmup = F)$c4_transformed_2 %>% t
+ct4_3_samples <- rstan::extract(stan_fit, pars = c("c4_transformed_3"), permuted=T, inc_warmup = F)$c4_transformed_3 %>% t
+rownames(ct4_1_samples) <- phrase_index
+rownames(ct4_2_samples) <- phrase_index
+rownames(ct4_3_samples) <- phrase_index
+```
+
+
+```{r}
+
+pooled_item_gammas <- gamma_samples %>% apply(., MARGIN = 1, FUN = quantile, probs = c(0.025, 0.5, 0.975)) %>% t() %>% as.data.frame() %>% dplyr::rename("lower" = "2.5%", "median" = "50%", "upper" = "97.5%")
+```
+
+
+```{r}
+# 4-point scale cutpoints
+cutpoints_transformed_df_4point <- data.frame(no_modeled = ct4_1_samples %>% apply(., MARGIN = 1, FUN = median),
+                                              middle_modeled = ct4_2_samples %>% apply(., MARGIN = 1, FUN = median),
+                                              yes_modeled = ct4_3_samples %>% apply(., MARGIN = 1, FUN = median))
+cutpoints_transformed_df_4point$gammas <- pooled_item_gammas$median[match(rownames(cutpoints_transformed_df_4point), rownames(pooled_item_gammas))]
+cutpoints_transformed_df_4point$gammas_upper <- pooled_item_gammas$upper[match(rownames(cutpoints_transformed_df_4point), rownames(pooled_item_gammas))]
+cutpoints_transformed_df_4point$gammas_lower <- pooled_item_gammas$lower[match(rownames(cutpoints_transformed_df_4point), rownames(pooled_item_gammas))]
+
+#cutpoints_transformed_df_4point
+```
+
+
+```{r}
+## -----------------------------------------------------------------------------
+message("Plotting gammas...")
+
+gammas_toplot <- pooled_item_gammas %>% arrange((median))
+
+gamma_xlim = 6
+gamma_sidemar = 4
+
+pdf(file = paste0("../results/gammas.pdf"), width = 6, height = 14)
+
+par(bty="n", xpd = T, mar = c(5.1, gamma_sidemar, 3.1, gamma_sidemar))
+plot(gammas_toplot$median, 1:nrow(gammas_toplot), ylab = "", yaxt = "n", xlab = expression(paste("Phrase Slants ", gamma)), xlim = c(-gamma_xlim,gamma_xlim), main = "Item Gammas")
+points(gammas_toplot$median, 1:nrow(gammas_toplot), pch=16)
+segments(x0 = gammas_toplot$lower, x1 = gammas_toplot$upper, y0 = 1:nrow(gammas_toplot), col = rgb(0,0,0,.5))
+text(x = if_else(gammas_toplot$median<0, gammas_toplot$lower,gammas_toplot$upper), y = 1:nrow(gammas_toplot), labels = rownames(gammas_toplot), pos = if_else(gammas_toplot$median<0, 2,4))
+par(xpd=F)
+abline(v=0, lty=3)
+
+dev.off()
+
+```
+
+
+```{r}
+# Set stickplot color scheme
+
+value = .8
+saturation = .7
+
+lo_hi_colorspread <- 20
+
+no_color_hsv = hsv(0/365, saturation, value)
+maybe_lo_hsv = hsv((52-lo_hi_colorspread)/365, saturation, value)
+maybe_color_hsv = hsv(52/365, saturation, value)
+maybe_hi_hsv = hsv((52+lo_hi_colorspread)/365, saturation, value)
+yes_color_hsv = hsv(136/365, saturation, value)
+
+```
+
+
+```{r}
+base_rug_resolution = 2000
+#base_rug_bandwidth = 2000
+
+#get alpha samples (same as before)
+alpha_samples_unlisted <- alpha_samples %>% c() %>% sample (100000)
+
+# rescale range of alpha_samples_unlisted so that value domain matches plot domain
+alpha_samples_unlisted_rescaled <- (alpha_samples_unlisted/4)*base_rug_resolution/2
+alpha_samples_unlisted_rescaled_rounded <- round(alpha_samples_unlisted_rescaled)
+
+# plot in 3-pixel bandwidth
+alpha_samples_unlisted_rescaled_rounded <- c(alpha_samples_unlisted_rescaled_rounded, alpha_samples_unlisted_rescaled_rounded+1, alpha_samples_unlisted_rescaled_rounded-1)
+
+# make counts
+vec_factor <- factor(alpha_samples_unlisted_rescaled_rounded, levels = -(base_rug_resolution/2):(base_rug_resolution/2))
+counts <- as.integer(table(vec_factor))
+counts_normalized <- (1 - counts/max(counts))
+
+# make 3d array
+array_3d <- array(0, dim = c(length(counts_normalized), 3, 40))
+
+# Fill each slice of the new dimensions with the 'counts' vector
+for (i in 1:dim(array_3d)[2]) {
+  for (j in 1:dim(array_3d)[3]) {
+    array_3d[, i, j] <- counts_normalized
+  }
+}
+
+# reshape array to work as raster
+rug_raster <- array_3d %>% aperm(., c(3,1,2))
+```
+
+
+```{r}
+maybe_color_rgb <- maybe_color_hsv %>% col2rgb
+no_color_rgb <- no_color_hsv %>% col2rgb
+yes_color_rgb <- yes_color_hsv %>% col2rgb
+
+maybe_hi_rgb <- maybe_hi_hsv %>% col2rgb
+maybe_lo_rgb <- maybe_lo_hsv %>% col2rgb
+
+```
+
+
+```{r}
+draw_sticks_baseR <- function(img, x0, x1, color) {
+  x0 <- max(min(x0, dim(img)[1]), 1)
+  x1 <- max(min(x1, dim(img)[1]), 1)
+  if (x0 > x1) { temp <- x0; x0 <- x1; x1 <- temp }
+  img[x0:x1, 1, ] <- array(rep(color, each=length(x1:x0)), dim = c(length(x1:x0), 1, 3))
+  return(img)
+}
+
+map_range <- function(x, from_min, from_max, to_min, to_max) {
+  (x - from_min) * (to_max - to_min) / (from_max - from_min) + to_min
+}
+
+
+clean_stick_rasters <- function(input){
+  output <- input %>% as.array %>% aperm(., c(2,1,3)) %>% {./255}
+  output[which(is.na(output), arr.ind = T)] <- 1
+  return(output)
+}
+
+```
+
+
+```{r}
+## ----graphics settings--------------------------------------------------------
+# plot settings
+plot_scale = .83
+
+fullpage_width = 12*plot_scale
+halfpage_width = 6*plot_scale
+
+square_plot_size = 5*plot_scale
+
+phraselevel_effects_height = 6*plot_scale
+
+#squareplots settings
+squareplot_top_margin <- 0
+
+#sbs settings
+sbs_side_padding <- 14*plot_scale
+sbs_inner_padding <- 1*plot_scale
+sbs_pdf_height = halfpage_width
+sbs_statement_cex <- .9
+sbs_phrase_font <- 2
+
+limits <- c(-6.03169, 6.03169)
+
+stick_xlim <- 4
+stick_width_padding <- 1
+stick_width <- stick_xlim + stick_width_padding
+
+statement_offset <- 1
+main_lwd <- 8
+bar_height = .8
+
+# Termlevel treateffects
+font_phraselevel_treateffects <- 2
+
+###
+
+# Parameters
+width_px <- 2000
+height_px <- 40
+inner_height_px <- 1
+start_iter <- 1
+#N <- ncol(ct3_1_samples)
+N <- 2500
+
+```
+
+
+```{r}
+# 4-point phrases
+
+#J <- length(phrase_index_4point)
+J <- nrow(ct4_1_samples)
+
+# Initialize list to store averaged images
+stacked_images <- vector("list", J)
+
+# Iterate over columns
+pb <- progress_bar$new(total = N, format = "  Plotting [:bar] :percent eta: :eta")
+for (i in start_iter:N) {
+  pb$tick()
+  cutpoints_transformed_df_iterate <- data.frame(
+    no_modeled = ct4_1_samples[, i],
+    middle_modeled = ct4_2_samples[,i],
+    yes_modeled = ct4_3_samples[, i]
+  )
+  for (j in 1:J) {
+    png_data <- array(NA, dim = c(width_px, inner_height_px, 3))
+    png_data = draw_sticks_baseR(
+      png_data,
+      x0 = cutpoints_transformed_df_iterate$no_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      x1 = cutpoints_transformed_df_iterate$middle_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      color = maybe_lo_rgb
+    )
+    png_data = draw_sticks_baseR(
+      png_data,
+      x0 = cutpoints_transformed_df_iterate$middle_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      x1 = cutpoints_transformed_df_iterate$yes_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      color = maybe_hi_rgb
+    )
+    png_data = draw_sticks_baseR(
+      png_data,
+      x0 = cutpoints_transformed_df_iterate$no_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      x1 = if_else(
+        sign(cutpoints_transformed_df_iterate$yes_modeled[j] - cutpoints_transformed_df_iterate$no_modeled[j]) == 1,
+        limits[1], limits[2]
+      ) %>% map_range(., -stick_width, stick_width, 0, width_px),
+      color = no_color_rgb
+    )
+    png_data = draw_sticks_baseR(
+      png_data,
+      x0 = cutpoints_transformed_df_iterate$yes_modeled[j] %>% map_range(., -stick_width, stick_width, 0, width_px),
+      x1 = if_else(
+        sign(cutpoints_transformed_df_iterate$yes_modeled[j] - cutpoints_transformed_df_iterate$no_modeled[j]) == -1,
+        limits[1], limits[2]
+      ) %>% map_range(., -stick_width, stick_width, 0, width_px),
+      color = yes_color_rgb
+    )
+    if (i == 1) {
+      stacked_images[[j]] <- png_data
+    } else {
+      stacked_images[[j]] <- stacked_images[[j]] + png_data
+    }
+  }
+}
+
+averaged_images <- lapply(stacked_images, function(img) img / N)
+
+resized_images_4point <- lapply(averaged_images, clean_stick_rasters)
+
+
+```
+
+
+```{r}
+## -----------------------------------------------------------------------------
+rugtop = .4
+
+```
+
+
+
+```{r}
+# sbs smooth 4point ALL
+par(family = "SourceSansPro-Regular")
+pdf(file = paste0("../results/sbs_smooth_all_4point.pdf"), width = fullpage_width, height = sbs_pdf_height)
+par(mfrow=c(1,2))
+
+#left
+cutpoints_transformed_df_toplot <- cutpoints_transformed_df_4point %>%
+  arrange(desc(middle_modeled)) %>%
+  filter(gammas<0)
+
+xlim <- c(-stick_xlim,stick_xlim)
+x_stickwidth <- c(-stick_width,stick_width)
+bar_ys <- (1:nrow(cutpoints_transformed_df_toplot))
+ylim <- c(0, max(bar_ys))
+
+limits <- c(-max(abs(cutpoints_transformed_df_toplot)+1),max(abs(cutpoints_transformed_df_toplot)+1))
+
+par(mar = c(5.1, sbs_side_padding, 3.1, sbs_inner_padding), bty = "n")
+plot(cutpoints_transformed_df_toplot$no_modeled, bar_ys, ylab = "", yaxt = "n", xlab = "Respondent Lexical Ideology", xlim = xlim, ylim = ylim, type = "n", main = "", xaxt = "n")
+title(main="Left-Slanted Phrases", line=0)
+
+par(xpd=F)
+
+for (j in 1:nrow(cutpoints_transformed_df_toplot)){
+  rasterImage(resized_images_4point[[which(phrase_index==rownames(cutpoints_transformed_df_toplot)[j])]], xleft = x_stickwidth[1], xright = x_stickwidth[2], ybottom = bar_ys[j]-bar_height/2, ytop = bar_ys[j]+bar_height/2)
+}
+
+par(xpd=T)
+text(if_else(sign(cutpoints_transformed_df_toplot$yes_modeled - cutpoints_transformed_df_toplot$no_modeled)==1, xlim[2], xlim[1]), bar_ys, bar_ys,      labels = rownames(cutpoints_transformed_df_toplot) %>% toupper,      cex = sbs_statement_cex,
+     pos = if_else(sign(cutpoints_transformed_df_toplot$yes_modeled - cutpoints_transformed_df_toplot$no_modeled)==1, 4, 2),
+     font = sbs_phrase_font,      offset = statement_offset)
+
+par(xpd=F)
+rasterImage(rug_raster, xleft = xlim[1], xright = xlim[2], ybottom = -1, ytop = rugtop)
+
+axis(side = 1)
+
+# right
+cutpoints_transformed_df_toplot <- cutpoints_transformed_df_4point %>%
+  arrange((middle_modeled)) %>%
+  filter(gammas>0)
+
+bar_ys <- (1:nrow(cutpoints_transformed_df_toplot))
+ylim <- c(0, max(bar_ys))
+
+limits <- c(-max(abs(cutpoints_transformed_df_toplot)+1),max(abs(cutpoints_transformed_df_toplot)+1))
+
+par(mar = c(5.1, sbs_inner_padding, 3.1, sbs_side_padding), bty = "n")
+plot(cutpoints_transformed_df_toplot$no_modeled, bar_ys, ylab = "", yaxt = "n", xlab = "Respondent Lexical Ideology", xlim = xlim, ylim = ylim, type = "n", main = "", xaxt = "n")
+title(main="Right-Slanted Phrases", line=0)
+
+par(xpd=F)
+
+for (j in 1:nrow(cutpoints_transformed_df_toplot)){
+  rasterImage(resized_images_4point[[which(phrase_index==rownames(cutpoints_transformed_df_toplot)[j])]], xleft = x_stickwidth[1], xright = x_stickwidth[2], ybottom = bar_ys[j]-bar_height/2, ytop = bar_ys[j]+bar_height/2)
+}
+
+
+
+par(xpd=T)
+text(if_else(sign(cutpoints_transformed_df_toplot$yes_modeled - cutpoints_transformed_df_toplot$no_modeled)==1, xlim[2], xlim[1]), bar_ys, bar_ys,      labels = rownames(cutpoints_transformed_df_toplot) %>% toupper,      cex = sbs_statement_cex,
+     pos = if_else(sign(cutpoints_transformed_df_toplot$yes_modeled - cutpoints_transformed_df_toplot$no_modeled)==1, 4, 2),
+     font = sbs_phrase_font,      offset = statement_offset)
+
+par(xpd=F)
+rasterImage(rug_raster, xleft = xlim[1], xright = xlim[2], ybottom = -1, ytop = rugtop)
+
+axis(side = 1)
+#par(xpd=T)
+#legend(x=-5, y=20, legend = c("Definitely", "Probably", "Probably Not", "Definitely Not"), pch = 15, cex=.8, col = c(yes_color_hsv, maybe_hi_hsv, maybe_lo_hsv, no_color_hsv), bty = "o", horiz = T)
+dev.off()
+
+```
+
+
+```{r}
+pdf(file = paste0("../results/sbs_legend.pdf"), width = fullpage_width, height = sbs_pdf_height/10)
+par(xpd=T, mar = c(0,0,0,0), bty="n")
+plot(x = c(0,1), y = c(0,1), type = "n", xaxt = "n", yaxt = "n")
+legend("center", legend = c("Definitely", "Probably", "Probably Not", "Definitely Not"), pch = 15, cex=.8, col = c(yes_color_hsv, maybe_hi_hsv, maybe_lo_hsv, no_color_hsv), bty = "o", horiz = T, text.width=.1, pt.cex = 1.25)
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+# Hypothesis Tests
+
+## H1
+
+
+```{r}
+estimatr::lm_robust(beta ~ platform_treatment, data = d_final %>% filter(poster), se_type = "HC2") %>% coefplot::coefplot()
+
+mod_h1_pooled_ks <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+#mod_h1
+
+(mod_h1_pooled_ks$p.value['platform_treatment']/2) < .00001
+
+if ((mod_h1_pooled_ks$p.value['platform_treatment']/2) < .00001){
+  writeLines("($p<.00001$, pre-registered one-sided test),", "../results/h1_p.txt")
+}
+```
+
+
+## H2
+
+```{r}
+estimatr::lm_robust(alpha ~ platform_treatment, data = d_final %>% filter(poster), se_type = "HC2") %>% coefplot::coefplot()
+
+mod_h2_pooled_ks <- estimatr::lm_robust(alpha ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+#mod_h2
+
+(mod_h2_pooled_ks$p.value['platform_treatment']/2) < .05 #p=.36
+
+h2_p_rounded <- round(mod_h2_pooled_ks$p.value['platform_treatment']/2, 2) %>% as.character() %>% substring(., first = 2)
+
+writeLines(paste0("$p\\approx",h2_p_rounded,"$, pre-registered one-sided test),"), "../results/h2_p.txt")
+
+```
+
+
+## H3
+
+```{r}
+sig_thresholds <- c(.1, .01, .001, .0001, .00001, .000001, .0000001, .00000001)
+
+```
+
+
+```{r}
+test_h3 <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater")
+#test_h3
+
+test_h3$p.value < 0.000001 #p=3e-07
+
+#test_h3$statistic %>% round(2) %>% paste0("F=",.,",") %>% writeLines(., "../results/h3_fstat.txt")
+
+paste0("($F=",test_h3$statistic %>% round(2),"$, $p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h3$p.value)]),"}$, pre-registered one-sided test).") %>% writeLines(., "../results/h3_fp.txt")
+
+
+```
+
+
+```{r}
+# plot colors
+color_poster_online = rgb(.8,.2,.8,1)
+color_poster_offline = rgb(.2,.8,.2,1)
+color_lurker = rgb(.8,.1,.2,1)
+
+```
+
+
+
+```{r}
+# color_poster = rgb(.2,.8,.2,1)
+# color_lurker = rgb(.8,.1,.2,1)
+
+this_bw = .25
+
+# Compute histograms
+density_poster <- density(d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), bw = this_bw)
+density_lurker <- density(d_final %>% filter(!poster) %>% filter(platform_treatment==0) %>% pull(alpha), bw = this_bw)
+
+# Plot and fill the first density
+plot(density_poster, main="Overlaying Two Filled Densities", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster$x, density_poster$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+lines(density_poster, col=color_poster_offline, lwd=2)
+polygon(density_lurker$x, density_lurker$y, col=adjustcolor(color_lurker, alpha.f=0.5), border=NA)
+lines(density_lurker, col=color_lurker, lwd=2)
+legend("topright", legend = c("Lurkers Offline", "Posters Offline"), col = c(color_lurker, color_poster_offline), pch = 15, bty = "n")
+
+
+```
+
+
+
+## H4
+
+```{r}
+test_h4 <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater")
+test_h4
+
+test_h4$p.value
+test_h4$p.value < .05 # Null for H4, as predicted!
+
+paste0("($F=",test_h4$statistic %>% round(2),"$, $p = ", test_h4$p.value %>% round(.,2),"}$, pre-registered one-sided test).") %>% writeLines(., "../results/h4_fp.txt")
+```
+
+
+```{r}
+# color_poster_online = rgb(.8,.2,.8,1)
+# color_poster_offline = rgb(.2,.8,.2,1)
+
+this_bw = .25
+
+# Compute histograms
+density_poster_online <- density(d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha), bw = this_bw)
+density_poster_offline <- density(d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), bw = this_bw)
+
+par(bty = "n")
+
+# Plot and fill the first density
+plot(density_poster_online, main="Overlaying Two Filled Densities", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster_offline$x, density_poster_offline$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+lines(density_poster_offline, col=color_poster_offline, lwd=2)
+polygon(density_poster_online$x, density_poster_online$y, col=adjustcolor(color_poster_online, alpha.f=0.5), border=NA)
+lines(density_poster_online, col=color_poster_online, lwd=2)
+legend("topright", legend = c("Posters Online", "Posters Offline"), col = c(color_poster_online, color_poster_offline), pch = 15, bty = "n")
+
+
+```
+
+# Exploratory Analyses
+
+## H1 Het Fx on Beta by Alpha
+
+```{r}
+poster_alpha_quartiles <- d_final %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.25,.5,.75))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[3]), se_type = "HC2")
+
+test_mod_1$coefficients["platform_treatment"]
+test_mod_2$coefficients["platform_treatment"]
+test_mod_3$coefficients["platform_treatment"]
+test_mod_4$coefficients["platform_treatment"]
+
+
+
+```
+
+
+```{r}
+data_to_plot <- d_final %>% filter(poster)# %>% filter(relsim_trin)
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.2,.4,.6,.8))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+
+plot(x = c(-2,.5), y = c(1,5), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5))
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)
+)
+
+```
+
+
+
+
+```{r}
+y_adj <- .2
+
+
+data_to_plot <- d_final %>% filter(poster)
+mark_col = "gray1"
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.2,.4,.6,.8))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,6), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)-y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+```{r}
+y_adj <- .2
+
+
+data_to_plot <- d_final %>% filter(poster)
+mark_col = "gray1"
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.33333,.66666))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,4), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)-y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+```{r}
+d_toplot <- d_final %>% filter(!is.na(IDEO)) %>% filter(!is.na(relsim))# %>% group_by(IDEO) %>% summarise(mean_relsim = mean(relsim))
+
+plot(d_toplot$IDEO, d_toplot$relsim)
+
+range(d_final$relsim, na.rm = T)
+
+
+# Sample data
+df <- d_toplot
+
+# Tabulate by IDEO and relsim
+tabulated <- table(df$IDEO, df$relsim)
+
+# Transpose the table
+transposed <- t(tabulated)
+
+# Create the stacked bar chart
+barplot(transposed, beside=FALSE, col=rainbow(5),
+        legend.text=rownames(transposed), ylim=c(0, max(rowSums(transposed)) + 5),
+        xlab="IDEO", ylab="Count", main="Stacked Bar Chart of IDEO by relsim")
+
+# Normalize counts to get proportions
+proportions <- sweep(tabulated, 1, rowSums(tabulated), FUN = "/")
+
+# Transpose the table of proportions
+transposed_proportions <- t(proportions)
+
+# Create the stacked bar chart showing proportions
+barplot(transposed_proportions, beside=FALSE, col=rainbow(5),
+        legend.text=rownames(transposed_proportions), ylim=c(0, 1),
+        xlab="IDEO", ylab="Proportion", main="Stacked Bar Chart of IDEO by relsim (Proportion)")
+
+```
+
+
+
+
+```{r}
+#with interaction
+
+y_adj <- .2
+
+
+data_to_plot <- d_final %>% filter(poster)
+mark_col = "gray1"
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.33333,.66666))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,4), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)-y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+```{r}
+y_adj <- .2
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.33333,.66666))
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="fb")
+mark_col = "purple3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,4), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)-y_adj, col = mark_col
+)
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="tw")
+mark_col = "skyblue3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)+y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+```{r}
+#by platform, with interaction effect
+y_adj <- .2
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.33333,.66666))
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="fb")
+mark_col = "purple3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,4), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)-y_adj, col = mark_col
+)
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="tw")
+mark_col = "skyblue3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)+y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+
+
+
+
+```{r}
+y_adj <- .2
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.33333,.66666))
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(relsim_trin==-1)
+mark_col = "red4"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,4), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)-y_adj, col = mark_col
+)
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(relsim_trin==0)
+mark_col = "gold4"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3), col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3), col = mark_col
+)
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(relsim_trin==1)
+mark_col = "green4"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[2]), se_type = "HC2")
+
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"]),
+       y = c(1:3)+y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"]
+                ), y0 = c(1:3)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+
+```{r}
+y_adj <- .25
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="fb")
+mark_col = "red3"
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.2,.4,.6,.8))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,6), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)-y_adj, col = mark_col)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)-y_adj, col = mark_col
+)
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="tw")
+mark_col = "forestgreen"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)+y_adj, col = mark_col)
+
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+```{r}
+y_adj <- .25
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="fb")
+mark_col = "red3"
+
+poster_alpha_quartiles <- data_to_plot %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.2,.4,.6,.8))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+
+plot(x = c(-1.5,1.5), y = c(0,6), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)-y_adj, col = mark_col)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)-y_adj, col = mark_col
+)
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="tw")
+mark_col = "forestgreen"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[4]), se_type = "HC2")
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)+y_adj, col = mark_col)
+
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+
+
+```{r}
+y_adj <- .2
+
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="fb")
+mark_col = "purple3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==1), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==2), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==3), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==4), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==5), se_type = "HC2")
+
+plot(x = c(-1.5,1.5), y = c(0,6), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)-y_adj, col = mark_col
+)
+
+data_to_plot <- d_final %>% filter(poster) %>% filter(primary_platform=="tw")
+mark_col = "skyblue3"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==1), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==2), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==3), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==4), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==5), se_type = "HC2")
+
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)+y_adj, col = mark_col, pch = 16)
+
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)+y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+
+
+```{r}
+y_adj <- .2
+
+
+data_to_plot <- d_final %>% filter(poster)# %>% filter(primary_platform=="fb")
+mark_col = "gray1"
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==1), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==2), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==3), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==4), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + college + poc, data = data_to_plot %>% filter(poster) %>% filter(IDEO==5), se_type = "HC2")
+
+plot(x = c(-1.5,1.5), y = c(0,6), type = "n")
+points(x = c(test_mod_1$coefficients["platform_treatment"],
+             test_mod_2$coefficients["platform_treatment"],
+             test_mod_3$coefficients["platform_treatment"],
+             test_mod_4$coefficients["platform_treatment"],
+             test_mod_5$coefficients["platform_treatment"]),
+       y = c(1:5)-y_adj, col = mark_col, pch = 16)
+segments(x0 = c(test_mod_1$conf.low["platform_treatment"],
+                test_mod_2$conf.low["platform_treatment"],
+                test_mod_3$conf.low["platform_treatment"],
+                test_mod_4$conf.low["platform_treatment"],
+                test_mod_5$conf.low["platform_treatment"]),
+         x1 = c(test_mod_1$conf.high["platform_treatment"],
+                test_mod_2$conf.high["platform_treatment"],
+                test_mod_3$conf.high["platform_treatment"],
+                test_mod_4$conf.high["platform_treatment"],
+                test_mod_5$conf.high["platform_treatment"]), y0 = c(1:5)-y_adj, col = mark_col
+)
+
+abline(v = 0, lty = 3)
+
+```
+
+
+
+
+
+
+
+```{r}
+poster_alpha_quartiles <- d_final %>% filter(poster) %>% pull(alpha) %>% quantile(., c(.1,.2,.3,.4,.5,.6,.7,.8,.9))
+
+test_mod_1 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha<poster_alpha_quartiles[1]), se_type = "HC2")
+test_mod_2 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[1]) %>% filter(alpha<poster_alpha_quartiles[2]), se_type = "HC2")
+test_mod_3 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[2]) %>% filter(alpha<poster_alpha_quartiles[3]), se_type = "HC2")
+test_mod_4 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[3]) %>% filter(alpha<poster_alpha_quartiles[4]), se_type = "HC2")
+test_mod_5 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[4]) %>% filter(alpha<poster_alpha_quartiles[5]), se_type = "HC2")
+test_mod_6 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[5]) %>% filter(alpha<poster_alpha_quartiles[6]), se_type = "HC2")
+test_mod_7 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[6]) %>% filter(alpha<poster_alpha_quartiles[7]), se_type = "HC2")
+test_mod_8 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[7]) %>% filter(alpha<poster_alpha_quartiles[8]), se_type = "HC2")
+test_mod_9 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>=poster_alpha_quartiles[8]) %>% filter(alpha<poster_alpha_quartiles[9]), se_type = "HC2")
+test_mod_10 <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(alpha>poster_alpha_quartiles[9]), se_type = "HC2")
+
+test_mod_1$coefficients["platform_treatment"]
+test_mod_2$coefficients["platform_treatment"]
+test_mod_3$coefficients["platform_treatment"]
+test_mod_4$coefficients["platform_treatment"]
+test_mod_5$coefficients["platform_treatment"]
+test_mod_6$coefficients["platform_treatment"]
+test_mod_7$coefficients["platform_treatment"]
+test_mod_8$coefficients["platform_treatment"]
+test_mod_9$coefficients["platform_treatment"]
+test_mod_10$coefficients["platform_treatment"]
+```
+
+
+
+## Interaction with Likemindedness
+
+### Likemindedness
+
+```{r}
+plot(d_final %>% filter(poster) %>% pull(IDEO), d_final %>% filter(poster) %>% pull(relsim))
+
+boxplot(relsim ~ IDEO, data = d_final %>% filter(poster))
+
+d_relsim_by_ideo <- d_final %>% filter(poster) %>% group_by(IDEO) %>% summarise(mean_relsim = mean(relsim, na.rm = T)) %>% filter(!is.na(IDEO))
+
+plot(d_relsim_by_ideo$IDEO, d_relsim_by_ideo$mean_relsim)
+
+d_final$relsim_trin
+
+d_final %>% filter(poster) %>% pull(IDEO) %>% hist
+
+d_final %>% filter(poster) %>% filter(IDEO==1) %>% pull(relsim) %>% hist
+d_final %>% filter(poster) %>% filter(IDEO==2) %>% pull(relsim) %>% hist
+d_final %>% filter(poster) %>% filter(IDEO==3) %>% pull(relsim) %>% hist
+d_final %>% filter(poster) %>% filter(IDEO==4) %>% pull(relsim) %>% hist
+d_final %>% filter(poster) %>% filter(IDEO==5) %>% pull(relsim) %>% hist
+
+```
+
+
+### H1
+
+
+```{r}
+#DV: beta
+mod_h1_int_relsim_adj <- estimatr::lm_robust(beta ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+mod_h1_int_relsim_adj$coefficients["platform_treatment:relsim"]
+mod_h1_int_relsim_adj$p.value["platform_treatment:relsim"] < .05
+
+#mod_h1_int_relsim_trin_adj <- estimatr::lm_robust(beta ~ platform_treatment*relsim_trin + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+
+# unadjusted: 
+mod_h1_int_relsim_unadj <- estimatr::lm_robust(beta ~ platform_treatment*relsim, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+mod_h1_int_relsim_unadj$coefficients["platform_treatment:relsim"]
+mod_h1_int_relsim_unadj$p.value["platform_treatment:relsim"] < .05
+
+#mod_h1_int_relsim_trin_adj <- estimatr::lm_robust(beta ~ platform_treatment*relsim_trin, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+
+```
+
+
+```{r}
+#DV: beta (subset analyses, 3-level)
+
+#adjusted model
+mod_h1_sub_relsim_trin_lo_adj <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(relsim_trin<0), se_type = "HC2")
+mod_h1_sub_relsim_trin_lo_adj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_lo_adj$p.value["platform_treatment"]/2 < .00001 # p=.0000086
+
+mod_h1_sub_relsim_trin_0_adj <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(relsim_trin==0), se_type = "HC2")
+mod_h1_sub_relsim_trin_0_adj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_0_adj$p.value["platform_treatment"]/2 < .05 #p=.01
+
+mod_h1_sub_relsim_trin_hi_adj <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(relsim_trin>0), se_type = "HC2")
+mod_h1_sub_relsim_trin_hi_adj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_hi_adj$p.value["platform_treatment"]/2 < .05 #p=.40
+
+
+# unadjusted models --- 
+mod_h1_sub_relsim_trin_lo_unadj <- estimatr::lm_robust(beta ~ platform_treatment, data = d_final %>% filter(poster) %>% filter(relsim_trin<0), se_type = "HC2") #-.4, p<.0001
+mod_h1_sub_relsim_trin_lo_unadj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_lo_unadj$p.value["platform_treatment"]/2 < .05
+
+mod_h1_sub_relsim_trin_0_unadj <- estimatr::lm_robust(beta ~ platform_treatment, data = d_final %>% filter(poster) %>% filter(relsim_trin==0), se_type = "HC2") #-.27, p<.05
+mod_h1_sub_relsim_trin_0_unadj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_0_unadj$p.value["platform_treatment"]/2 < .05
+
+mod_h1_sub_relsim_trin_hi_unadj <- estimatr::lm_robust(beta ~ platform_treatment, data = d_final %>% filter(poster) %>% filter(relsim_trin>0), se_type = "HC2") #.06, p=.73
+mod_h1_sub_relsim_trin_hi_unadj$coefficients["platform_treatment"]
+mod_h1_sub_relsim_trin_hi_unadj$p.value["platform_treatment"]/2 < .05
+
+
+```
+
+
+### H2
+
+```{r}
+#DV: alpha
+mod_h2_int_relsim_adj <- estimatr::lm_robust(alpha ~ platform_treatment*relsim + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+mod_h2_int_relsim_trin_adj <- estimatr::lm_robust(alpha ~ platform_treatment*relsim_trin + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+
+# unadjusted: 
+mod_h2_int_relsim_unadj <- estimatr::lm_robust(alpha ~ platform_treatment*relsim, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+mod_h2_int_relsim_trin_unadj <- estimatr::lm_robust(alpha ~ platform_treatment*relsim_trin, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+
+```
+
+
+### H3
+
+```{r}
+# H3 -- self-selection
+# main H confirmed for relsim_trin<=0
+
+# Amongst people for whom offline is more likeminded than online, posters are more extreme than lurkers
+test_h3_sub_relsim_trin_lo <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin<0) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(relsim_trin<0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #1.60; p<.001
+
+# Amongst people for whom offline and online are equally likeminded, posters are more extreme than lurkers
+test_h3_sub_relsim_trin_0 <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin==0) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(relsim_trin==0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #1.47; p<.01
+
+# Amongst people for whom online is more likeminded than offline, the difference is not significant at conventional levels
+test_h3_sub_relsim_trin_hi <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin>0) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(relsim_trin>0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #1.39; p = .15
+
+
+# synthesis: self-selection aligns with extremity MOST among people whose online networks are LESS likeminded than their offline networks --> this makes sense, if people self-censor online when online is non-likeminded and their speech is moderate
+```
+
+### H4
+
+```{r}
+# H4 -- polarization
+# main H (null) confirmed
+
+test_h4_sub_relsim_trin_lo <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin<0) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(relsim_trin<0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #.98, p=.60
+
+test_h4_sub_relsim_trin_0 <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin==0) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(relsim_trin==0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #.88, p=.88
+
+test_h4_sub_relsim_trin_hi <- var.test(d_final %>% filter(poster) %>% filter(relsim_trin>0) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(relsim_trin>0) %>% filter(platform_treatment==0) %>% pull(alpha), alternative = "greater") #1.1; p=.27
+
+```
+
+
+
+## Anonymity
+
+```{r}
+anon_pca_1d <- psych::principal(d_final %>% select(starts_with("acct")), nfactors = 1)
+d_final$anon_pca_1d_scores <- anon_pca_1d$scores
+
+anon_pca_2d <- psych::principal(d_final %>% select(starts_with("acct")), nfactors = 2)
+anon_pca_2d
+d_final$anon_pca_2d_scores_d1 <- anon_pca_2d$scores[,1]
+d_final$anon_pca_2d_scores_d2 <- anon_pca_2d$scores[,2]
+
+#plot()
+```
+
+### Outspokenness
+
+```{r}
+#PCA 1d
+
+estimatr::lm_robust(beta ~ acct_shows_name + acct_shows_face + acct_vis_rwf + acct_vis_fam + acct_vis_work, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ acct_shows_name, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ acct_shows_face, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ acct_vis_rwf, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ acct_vis_fam, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ acct_vis_work, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+
+```
+
+```{r}
+#PCA 2d (d1 is visibility, d2 is show name,face)
+
+# adjusted
+estimatr::lm_robust(beta ~ anon_pca_2d_scores_d1 + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ anon_pca_2d_scores_d2 + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+# unadjusted
+estimatr::lm_robust(beta ~ anon_pca_2d_scores_d1, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(beta ~ anon_pca_2d_scores_d2, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+
+```
+
+
+### H1
+
+```{r}
+# 1d anon pca interaction
+#DV: beta
+mod_h1_int_anon_pca_1d_adj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_1d_scores + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+mod_h1_int_anon_pca_1d_adj$coefficients["platform_treatment:anon_pca_1d_scores"]
+mod_h1_int_anon_pca_1d_adj$p.value["platform_treatment:anon_pca_1d_scores"] < .05
+
+# unadjusted: 
+mod_h1_int_anon_pca_1d_unadj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_1d_scores, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+mod_h1_int_anon_pca_1d_unadj$coefficients["platform_treatment:anon_pca_1d_scores"]
+mod_h1_int_anon_pca_1d_unadj$p.value["platform_treatment:anon_pca_1d_scores"] < .05
+
+```
+
+
+
+```{r}
+# 2d anon pca interaction
+#DV: beta
+mod_h1_int_anon_pca_2d_scores_d1_adj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_2d_scores_d1 + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+mod_h1_int_anon_pca_2d_scores_d1_adj$coefficients["platform_treatment:anon_pca_2d_scores_d1"]
+mod_h1_int_anon_pca_2d_scores_d1_adj$p.value["platform_treatment:anon_pca_2d_scores_d1"] < .05
+
+# unadjusted: 
+mod_h1_int_anon_pca_2d_scores_d1_unadj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_2d_scores_d1, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+mod_h1_int_anon_pca_2d_scores_d1_unadj$coefficients["platform_treatment:anon_pca_2d_scores_d1"]
+mod_h1_int_anon_pca_2d_scores_d1_unadj$p.value["platform_treatment:anon_pca_2d_scores_d1"] < .05
+
+
+#DV: beta
+mod_h1_int_anon_pca_2d_scores_d2_adj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_2d_scores_d2 + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+mod_h1_int_anon_pca_2d_scores_d2_adj$coefficients["platform_treatment:anon_pca_2d_scores_d2"]
+mod_h1_int_anon_pca_2d_scores_d2_adj$p.value["platform_treatment:anon_pca_2d_scores_d2"] < .05
+
+# unadjusted: 
+mod_h1_int_anon_pca_2d_scores_d2_unadj <- estimatr::lm_robust(beta ~ platform_treatment*anon_pca_2d_scores_d2, data = d_final %>% filter(poster), se_type = "HC2") #sig pos interaction! p=.03
+mod_h1_int_anon_pca_2d_scores_d2_unadj$coefficients["platform_treatment:anon_pca_2d_scores_d2"]
+mod_h1_int_anon_pca_2d_scores_d2_unadj$p.value["platform_treatment:anon_pca_2d_scores_d2"] < .05
+
+```
+
+
+
+### Extremity
+
+```{r}
+estimatr::lm_robust(abs(alpha) ~ platform_treatment*anon_pca_1d_scores + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(abs(alpha) ~ anon_pca_1d_scores, data = d_final %>% filter(poster), se_type = "HC2") %>% coefplot::coefplot()
+
+```
+
+
+```{r}
+#estimatr::lm_robust(abs(alpha) ~ anon_pca_1d_scores + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+estimatr::lm_robust(abs(alpha) ~ acct_shows_name + acct_shows_face + acct_vis_rwf + acct_vis_fam + acct_vis_work, data = d_final %>% filter(poster) %>% filter(platform_treatment==1) , se_type = "HC2") %>% coefplot::coefplot()
+
+
+# d_final$acct_shows_name
+# d_final$acct_shows_face
+# d_final$acct_vis_rwf
+# d_final$acct_vis_fam
+# d_final$acct_vis_work
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+
+
+# Platform-Specific Analyses
+
+## Facebook
+
+```{r}
+## H1
+mod_h1_fb <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(primary_platform=="fb"), se_type = "HC2")
+mod_h1_fb
+
+mod_h1_fb$coefficients['platform_treatment']
+mod_h1_fb$p.value['platform_treatment']/2 #p<0.001
+mod_h1_fb$p.value['platform_treatment']/2 < 0.001
+```
+
+
+```{r}
+## H2
+mod_h2_fb <- estimatr::lm_robust(alpha ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(primary_platform=="fb"), se_type = "HC2")
+mod_h2_fb
+
+mod_h2_fb$coefficients['platform_treatment']
+mod_h2_fb$p.value['platform_treatment']/2 #p=.36
+```
+
+
+```{r}
+## H3
+test_h3_fb <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(platform_treatment==0) %>% filter(primary_platform=="fb") %>% pull(alpha), alternative = "greater")
+test_h3_fb
+
+test_h3_fb$estimate
+test_h3_fb$p.value #p<.00001
+test_h3_fb$p.value <.000001
+
+paste0("$p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h3_fb$p.value)]),"}$") %>% writeLines(., "../results/h3_fb_p.txt")
+
+paste0("($F=",test_h3_fb$statistic %>% round(2),"$, $p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h3_fb$p.value)]),"}$, ") %>% writeLines(., "../results/h3_fb_fp.txt")
+```
+
+
+```{r}
+## H4
+test_h4_fb <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% filter(primary_platform=="fb") %>% pull(alpha), alternative = "greater")
+test_h4_fb
+
+test_h4_fb$estimate
+test_h4_fb$p.value #p=.078
+
+paste0("($F=",test_h4_fb$statistic %>% round(2),"$, $p \\approx ", test_h4_fb$p.value %>% round(.,2),"}$, ") %>% writeLines(., "../results/h4_fb_fp.txt")
+```
+
+
+## Twitter
+
+```{r}
+## H1
+mod_h1_tw <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(primary_platform=="tw"), se_type = "HC2")
+mod_h1_tw
+
+mod_h1_tw$coefficients['platform_treatment']
+mod_h1_tw$p.value['platform_treatment']/2 #p<.0001
+mod_h1_tw$p.value['platform_treatment']/2 < .0001
+```
+
+
+```{r}
+## H2
+mod_h2_tw <- estimatr::lm_robust(alpha ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster) %>% filter(primary_platform=="tw"), se_type = "HC2")
+mod_h2_tw
+
+mod_h2_tw$coefficients['platform_treatment']
+mod_h2_tw$p.value['platform_treatment']/2 #p=.35
+```
+
+
+```{r}
+## H3
+test_h3_tw <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha), d_final %>% filter(!poster) %>% filter(platform_treatment==0) %>% filter(primary_platform=="tw") %>% pull(alpha), alternative = "greater")
+test_h3_tw
+
+test_h3_tw$estimate
+test_h3_tw$p.value #p<.003
+
+paste0("$p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h3_tw$p.value)]),"}$") %>% writeLines(., "../results/h3_tw_p.txt")
+
+paste0("and $F=",test_h3_tw$statistic %>% round(2),"$, $p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h3_tw$p.value)]),"}$,") %>% writeLines(., "../results/h3_tw_fp.txt")
+```
+
+
+```{r}
+## H4
+test_h4_tw <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% filter(primary_platform=="tw") %>% pull(alpha), alternative = "greater")
+test_h4_tw
+
+test_h4_tw$estimate
+test_h4_tw$p.value #p=.998
+
+paste0("and $F=",test_h4_tw$statistic %>% round(2),"$, $p \\approx ", test_h4_tw$p.value %>% round(.,2),"}$,") %>% writeLines(., "../results/h4_tw_fp.txt")
+
+test_h4_tw_2sided <- var.test(d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha), d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% filter(primary_platform=="tw") %>% pull(alpha), alternative = "two.sided")
+test_h4_tw_2sided
+
+#paste0("($F=",test_h4_tw_2sided$statistic %>% round(2),"$, $p = ", test_h4_tw_2sided$p.value %>% round(.,2),"}$)") %>% writeLines(., "../results/h4_tw_2sided_fp.txt")
+
+paste0("($F=",test_h4_tw_2sided$statistic %>% round(2),"$, $p< 1 \\times 10^{-",length(sig_thresholds[which(sig_thresholds>test_h4_tw_2sided$p.value)]),"}$).") %>% writeLines(., "../results/h4_tw_2sided_fp.txt")
+```
+
+#
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+
+
+# Paper Plots
+
+## Triple Plot
+
+```{r}
+# # plot colors
+# # color_poster_online = rgb(.8,.2,.8,1)
+# # color_poster_offline = rgb(.1,.5,.1,1)
+# # color_lurker = rgb(.8,.1,.2,1)
+# 
+# color_poster_online = "#1a25b5"
+# color_poster_offline = "#25b51a"
+# color_lurker = "#b51a25"
+# 
+# pch = 16
+# ref_pch = 21
+# 
+# density_lwd = 1
+# 
+# twod_coefplot_xlim = .5
+# 
+# pdf(file = "triple_plot.pdf", width = 8, height = 3.5)
+# 
+# par(mfrow = c(1,3), pty = "s", bty = "n")
+# 
+# plot(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], xlim = c(-twod_coefplot_xlim,twod_coefplot_xlim), ylim = c(-twod_coefplot_xlim,twod_coefplot_xlim), type = "n",
+#      xlab = "Lexical Ideology Coefficient",
+#      ylab = "Outspokenness Coefficient",
+#      main = "")
+# #abline(h=0,v=0, lty = 3, col = reference_gray)
+# segments(x0 = c(0,0,0,0), x1 = c(0,1,0,-1), y0 = c(0,0,0,0), y1 = c(1, 0, -1, 0), lty = 3, col = "black")
+# 
+# 
+# points(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], pch = pch, col = color_poster_online)
+# segments(x0=mod_h2_pooled_ks$coefficients['platform_treatment'], y0=mod_h1_pooled_ks$conf.low['platform_treatment'], y1=mod_h1_pooled_ks$conf.high['platform_treatment'], col = color_poster_online)
+# segments(y0=mod_h1_pooled_ks$coefficients['platform_treatment'], x0=mod_h2_pooled_ks$conf.low['platform_treatment'], x1=mod_h2_pooled_ks$conf.high['platform_treatment'], col = color_poster_online)
+# 
+# # mod_h2_pooled_ks$conf.low['platform_treatment']
+# # mod_h2_pooled_ks$conf.high['platform_treatment']
+# # 
+# # mod_h1_pooled_ks$conf.low['platform_treatment']
+# # mod_h1_pooled_ks$conf.high['platform_treatment']
+# # 
+# # 
+# # legend("topleft", legend = c("Close Friend (Control)", "Someone You Just Met", "Most Liberal Person You Talk To", "Most Conservative Person You Talk To"), pch = c(ref_pch, pch, pch, pch), col = c(reference_gray, t1_coef_col, tlib_coef_col, tcon_coef_col), bty = "n", cex = lab_cex)
+# # 
+# 
+# #points(0,0, pch = ref_pch, col = reference_gray, bg="white")
+# 
+# #points(0,0, pch = ref_pch, col = color_poster_offline, bg="white")
+# points(0,0, pch = ref_pch, col = color_poster_offline, bg=color_poster_offline)
+# 
+# #####################
+# 
+# plot(density_poster, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+#      ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+#      type="n"  # This will not plot anything but set up the coordinates.
+# )
+# 
+# polygon(density_poster$x, density_poster$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+# lines(density_poster, col=color_poster_offline, lwd=density_lwd)
+# polygon(density_lurker$x, density_lurker$y, col=adjustcolor(color_lurker, alpha.f=0.5), border=NA)
+# lines(density_lurker, col=color_lurker, lwd=density_lwd)
+# #legend("topright", legend = c("Lurkers Offline", "Posters Offline"), col = c(color_lurker, color_poster_offline), pch = 15, bty = "n")
+# 
+# 
+# ###################
+# 
+# plot(density_poster_online, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+#      ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+#      type="n"  # This will not plot anything but set up the coordinates.
+# )
+# 
+# polygon(density_poster_offline$x, density_poster_offline$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+# lines(density_poster_offline, col=color_poster_offline, lwd=density_lwd)
+# polygon(density_poster_online$x, density_poster_online$y, col=adjustcolor(color_poster_online, alpha.f=0.5), border=NA)
+# lines(density_poster_online, col=color_poster_online, lwd=density_lwd)
+# #legend("topright", legend = c("Posters Online", "Posters Offline"), col = c(color_poster_online, color_poster_offline), pch = 15, bty = "n")
+# 
+# 
+# #################
+# 
+# par(xpd=T)
+# 
+# legend(0, .7, legend = c("Posters (Online)", "Posters (Offline)", "Lurkers (Offline)"), col = c(color_poster_online, color_poster_offline, color_lurker), pch = 16, bty = "n")
+# 
+# dev.off()
+```
+
+
+## Triple Plot (Separated)
+
+```{r}
+# plot colors
+# color_poster_online = rgb(.8,.2,.8,1)
+# color_poster_offline = rgb(.1,.5,.1,1)
+# color_lurker = rgb(.8,.1,.2,1)
+
+color_poster_online = "#1a25b5"
+color_poster_offline = "#25b51a"
+color_lurker = "#b51a25"
+
+# w_3gang_sep = 5
+# h_3gang_sep = 6
+w_3gang_sep = 4
+h_3gang_sep = 5
+
+pch = 16
+ref_pch = 21
+
+density_lwd = 1
+
+twod_coefplot_xlim = .5
+
+pdf(file = "../results/triple_plot_sep_h12.pdf", width = w_3gang_sep, height = h_3gang_sep)
+
+par(pty = "s", bty = "n")
+
+plot(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], xlim = c(-twod_coefplot_xlim,twod_coefplot_xlim), ylim = c(-twod_coefplot_xlim,twod_coefplot_xlim), type = "n",
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient",
+     main = "")
+segments(x0 = c(0,0,0,0), x1 = c(0,1,0,-1), y0 = c(0,0,0,0), y1 = c(1, 0, -1, 0), lty = 3, col = "black")
+
+
+points(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], pch = pch, col = color_poster_online)
+segments(x0=mod_h2_pooled_ks$coefficients['platform_treatment'], y0=mod_h1_pooled_ks$conf.low['platform_treatment'], y1=mod_h1_pooled_ks$conf.high['platform_treatment'], col = color_poster_online)
+segments(y0=mod_h1_pooled_ks$coefficients['platform_treatment'], x0=mod_h2_pooled_ks$conf.low['platform_treatment'], x1=mod_h2_pooled_ks$conf.high['platform_treatment'], col = color_poster_online)
+
+points(0,0, pch = ref_pch, col = color_poster_offline, bg=color_poster_offline)
+
+# par(xpd=T)
+# legend(-.3,.68, legend = c("Posters (Online)", "Posters (Offline)"), col = c(color_poster_online, color_poster_offline), pch = 16, bty = "n")
+
+dev.off()
+
+
+pdf(file = "../results/triple_plot_sep_h12_legend.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(bty="n")
+plot(1,1,type = "n", xaxt = "n", yaxt = "n", xlab = "", ylab = "")
+legend("center", legend = c("Posters (Online)", "Posters (Offline)"), col = c(color_poster_online, color_poster_offline), pch = 16, bty = "n")
+dev.off()
+
+#####################
+
+pdf(file = "../results/triple_plot_sep_h3.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(pty = "s", bty = "n")
+plot(density_poster, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster$x, density_poster$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+lines(density_poster, col=color_poster_offline, lwd=density_lwd)
+polygon(density_lurker$x, density_lurker$y, col=adjustcolor(color_lurker, alpha.f=0.5), border=NA)
+lines(density_lurker, col=color_lurker, lwd=density_lwd)
+
+# par(xpd=T)
+# legend(-3, .68, legend = c("Posters (Offline)", "Lurkers (Offline)"), col = c(color_poster_offline, color_lurker), pch = 16, bty = "n")
+
+dev.off()
+
+pdf(file = "../results/triple_plot_sep_h3_legend.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(bty="n")
+plot(1,1,type = "n", xaxt = "n", yaxt = "n", xlab = "", ylab = "")
+legend("center", legend = c("Posters (Offline)", "Lurkers (Offline)"), col = c(color_poster_offline, color_lurker), pch = 16, bty = "n")
+dev.off()
+
+###################
+
+pdf(file = "../results/triple_plot_sep_h4.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(pty = "s", bty = "n")
+plot(density_poster_online, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster_offline$x, density_poster_offline$y, col=adjustcolor(color_poster_offline, alpha.f=0.5), border=NA)
+lines(density_poster_offline, col=color_poster_offline, lwd=density_lwd)
+polygon(density_poster_online$x, density_poster_online$y, col=adjustcolor(color_poster_online, alpha.f=0.5), border=NA)
+lines(density_poster_online, col=color_poster_online, lwd=density_lwd)
+
+# par(xpd=T)
+# legend(-3,.68, legend = c("Posters (Online)", "Posters (Offline)"), col = c(color_poster_online, color_poster_offline), pch = 16, bty = "n")
+
+dev.off()
+
+pdf(file = "../results/triple_plot_sep_h4_legend.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(bty="n")
+plot(1,1,type = "n", xaxt = "n", yaxt = "n", xlab = "", ylab = "")
+legend("center", legend = c("Posters (Online)", "Posters (Offline)"), col = c(color_poster_online, color_poster_offline), pch = 16, bty = "n")
+dev.off()
+
+#################
+
+
+```
+
+
+## Triple Plot (Separated, B&W Safe)
+
+```{r}
+
+plotMiniBellCurve <- function(x0, x1, y0, y1, col = "black", fill = "gray", bottom_border = F, lty = 1) {
+  # Calculate the range for x values based on input coordinates
+  x_coords <- seq(x0, x1, length.out = 100)
+  
+  # Standard normal distribution scaled to fit within the rectangle defined by y0 and y1
+  # Adjust mean and sd to center and scale the curve within the box
+  mean <- mean(c(x0, x1))
+  sd <- (x1 - x0) / 6  # 99.7% data within +/- 3sd (covers most of the width)
+  y_values <- dnorm(x_coords, mean = mean, sd = sd)
+  
+  # Normalize y values to fit within y0 and y1
+  y_scaled <- (y_values - min(y_values)) / (max(y_values) - min(y_values)) * (y1 - y0) + y0
+  
+  # Draw the curve and fill below it
+  lines(x_coords, y_scaled, col = col, lty = lty)
+  polygon(c(x_coords, rev(x_coords)), c(rep(y0, length(x_coords)), rev(y_scaled)), col = fill, border = if_else(bottom_border, true = col, false = NA))
+}
+
+# Example usage in a plot:
+x <- 1:10
+y <- x^2
+plot(x, y, type = "o", col = "blue", pch = 19, ylim = c(0, 110), ylab = "Y", xlab = "X")
+
+# Add a miniature bell curve to the plot
+plotMiniBellCurve(7, 9, 30, 50, col = "red", fill = "pink")
+
+```
+
+
+```{r}
+
+minibell_vadj = -.072
+
+# plot colors
+#color_poster_online = "#1a25b5"
+color_poster_offline = "#000000"
+color_lurker = "#b51a25"
+
+saturation = .75
+value_lt = .75
+value_dk = .75
+
+hue_poster_online = 195
+color_poster_online_lt <- hsv(hue_poster_online/360, s = saturation, v = value_lt)
+color_poster_online_dk <- hsv(hue_poster_online/360, s = saturation, v = value_dk)
+
+hue_lurker = 0
+color_lurker_lt <- hsv(hue_lurker/360, s = saturation, v = value_lt)
+color_lurker_dk <- hsv(hue_lurker/360, s = saturation, v = value_dk)
+
+w_3gang_sep = 5
+h_3gang_sep = 5
+
+pch = 21
+
+density_lty = 1
+density_lwd = 1.5
+twod_coefplot_xlim = .5
+inset = c(-.15, 0)
+
+pdf(file = "../results/triple_plot_sep_h12_bwsafe.pdf", width = w_3gang_sep, height = h_3gang_sep)
+
+par(pty = "s", bty = "n")
+
+plot(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], xlim = c(-twod_coefplot_xlim,twod_coefplot_xlim), ylim = c(-twod_coefplot_xlim,twod_coefplot_xlim), type = "n",
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient",
+     main = "")
+segments(x0 = c(0,0,0,0), x1 = c(0,1,0,-1), y0 = c(0,0,0,0), y1 = c(1, 0, -1, 0), lty = 3, col = "black")
+
+points(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], pch = pch, col = color_poster_online_dk, bg = color_poster_online_dk)
+segments(x0=mod_h2_pooled_ks$coefficients['platform_treatment'], y0=mod_h1_pooled_ks$conf.low['platform_treatment'], y1=mod_h1_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+segments(y0=mod_h1_pooled_ks$coefficients['platform_treatment'], x0=mod_h2_pooled_ks$conf.low['platform_treatment'], x1=mod_h2_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+
+points(0,0, pch = 16, cex = 1.5, col = "white")
+points(0,0, pch = 21, col = color_poster_offline, bg="white")
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = c(color_poster_offline, color_poster_online_dk), pt.bg = c("white", color_poster_online_dk), pch = 21, bty = "n", inset = inset)
+
+dev.off()
+
+#####################
+
+pdf(file = "../results/triple_plot_sep_h3_bwsafe.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(pty = "s", bty = "n")
+plot(density_poster, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"
+)
+
+polygon(density_lurker$x, density_lurker$y, col=color_lurker_lt, border=NA)
+lines(density_poster, col=color_poster_offline, lwd=density_lwd, lty = density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Lurkers (Offline)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_lurker_lt, fill = color_lurker_lt, bottom_border = T)
+
+dev.off()
+
+###################
+
+pdf(file = "../results/triple_plot_sep_h4_bwsafe.pdf", width = w_3gang_sep, height = h_3gang_sep)
+par(pty = "s", bty = "n")
+plot(density_poster_online, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster_online$x, density_poster_online$y, col=color_poster_online_lt, border=NA)
+lines(density_poster_offline, col=color_poster_offline, lwd=density_lwd, lty=density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_poster_online_lt, fill = color_poster_online_lt, bottom_border = T)
+
+dev.off()
+
+
+```
+
+
+
+## Triple Plot (Separated, Non-Square)
+
+```{r fig.width=8, fig.height=8}
+
+h_3gang_sep_alt = h_3gang_sep*.8
+
+minibell_vadj = -.072
+
+# plot colors
+#color_poster_online = "#1a25b5"
+color_poster_offline = "#000000"
+color_lurker = "#b51a25"
+
+saturation = .75
+value_lt = .75
+value_dk = .75
+
+hue_poster_online = 195
+color_poster_online_lt <- hsv(hue_poster_online/360, s = saturation, v = value_lt)
+color_poster_online_dk <- hsv(hue_poster_online/360, s = saturation, v = value_dk)
+
+hue_lurker = 0
+color_lurker_lt <- hsv(hue_lurker/360, s = saturation, v = value_lt)
+color_lurker_dk <- hsv(hue_lurker/360, s = saturation, v = value_dk)
+
+w_3gang_sep = 5
+h_3gang_sep = 5
+
+pch = 21
+
+density_lty = 1
+density_lwd = 1.5
+twod_coefplot_xlim = .5
+inset = c(-.15, 0)
+
+pdf(file = "../results/triple_plot_sep_h12_polcomm_square.pdf", width = w_3gang_sep, height = h_3gang_sep)
+
+par(pty = "s", bty = "n")
+
+plot(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], xlim = c(-twod_coefplot_xlim,twod_coefplot_xlim), ylim = c(-twod_coefplot_xlim,twod_coefplot_xlim), type = "n",
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient",
+     main = "")
+segments(x0 = c(0,0,0,0), x1 = c(0,1,0,-1), y0 = c(0,0,0,0), y1 = c(1, 0, -1, 0), lty = 3, col = "black")
+
+points(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], pch = pch, col = color_poster_online_dk, bg = color_poster_online_dk)
+segments(x0=mod_h2_pooled_ks$coefficients['platform_treatment'], y0=mod_h1_pooled_ks$conf.low['platform_treatment'], y1=mod_h1_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+segments(y0=mod_h1_pooled_ks$coefficients['platform_treatment'], x0=mod_h2_pooled_ks$conf.low['platform_treatment'], x1=mod_h2_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+
+points(0,0, pch = 16, cex = 1.5, col = "white")
+points(0,0, pch = 21, col = color_poster_offline, bg="white")
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = c(color_poster_offline, color_poster_online_dk), pt.bg = c("white", color_poster_online_dk), pch = 21, bty = "n", inset = inset)
+
+dev.off()
+
+#####################
+
+pdf(file = "../results/triple_plot_sep_h3_polcomm_nonsquare.pdf", width = w_3gang_sep, height = h_3gang_sep_alt)
+#par(pty = "s", bty = "n")
+par(bty = "n")
+plot(density_poster, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"
+)
+
+polygon(density_lurker$x, density_lurker$y, col=color_lurker_lt, border=NA)
+lines(density_poster, col=color_poster_offline, lwd=density_lwd, lty = density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Lurkers (Offline)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_lurker_lt, fill = color_lurker_lt, bottom_border = T)
+
+dev.off()
+
+###################
+
+pdf(file = "../results/triple_plot_sep_h4_polcomm_nonsquare.pdf", width = w_3gang_sep, height = h_3gang_sep_alt)
+#par(pty = "s", bty = "n")
+par(bty = "n")
+plot(density_poster_online, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster_online$x, density_poster_online$y, col=color_poster_online_lt, border=NA)
+lines(density_poster_offline, col=color_poster_offline, lwd=density_lwd, lty=density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_poster_online_lt, fill = color_poster_online_lt, bottom_border = T)
+
+dev.off()
+
+
+```
+
+
+
+
+## Triple Plot (Separated, Improved Design + Annotation)
+
+```{r}
+
+h_3gang_sep_alt = h_3gang_sep*.7
+
+minibell_vadj = -.072
+
+# plot colors
+#color_poster_online = "#1a25b5"
+color_poster_offline = "#000000"
+color_lurker = "#b51a25"
+
+saturation = .75
+value_lt = .75
+value_dk = .75
+
+hue_poster_online = 195
+color_poster_online_lt <- hsv(hue_poster_online/360, s = saturation, v = value_lt)
+color_poster_online_dk <- hsv(hue_poster_online/360, s = saturation, v = value_dk)
+
+hue_lurker = 0
+color_lurker_lt <- hsv(hue_lurker/360, s = saturation, v = value_lt)
+color_lurker_dk <- hsv(hue_lurker/360, s = saturation, v = value_dk)
+
+w_3gang_sep = 5
+h_3gang_sep = 5
+
+pch = 21
+
+density_lty = 1
+density_lwd = 1.5
+twod_coefplot_xlim = .5
+inset = c(-.15, 0)
+
+pdf(file = "../results/triple_plot_sep_h12_polcomm_square.pdf", width = w_3gang_sep, height = h_3gang_sep)
+
+par(pty = "s", bty = "n")
+
+plot(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], xlim = c(-twod_coefplot_xlim,twod_coefplot_xlim), ylim = c(-twod_coefplot_xlim,twod_coefplot_xlim), type = "n",
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient",
+     main = "")
+segments(x0 = c(0,0,0,0), x1 = c(0,1,0,-1), y0 = c(0,0,0,0), y1 = c(1, 0, -1, 0), lty = 3, col = "black")
+
+points(mod_h2_pooled_ks$coefficients['platform_treatment'], mod_h1_pooled_ks$coefficients['platform_treatment'], pch = pch, col = color_poster_online_dk, bg = color_poster_online_dk)
+segments(x0=mod_h2_pooled_ks$coefficients['platform_treatment'], y0=mod_h1_pooled_ks$conf.low['platform_treatment'], y1=mod_h1_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+segments(y0=mod_h1_pooled_ks$coefficients['platform_treatment'], x0=mod_h2_pooled_ks$conf.low['platform_treatment'], x1=mod_h2_pooled_ks$conf.high['platform_treatment'], col = color_poster_online_dk)
+
+points(0,0, pch = 16, cex = 1.5, col = "white")
+points(0,0, pch = 21, col = color_poster_offline, bg="white")
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = c(color_poster_offline, color_poster_online_dk), pt.bg = c("white", color_poster_online_dk), pch = 21, bty = "n", inset = inset)
+
+dev.off()
+
+#####################
+
+pdf(file = "../results/triple_plot_sep_h3_polcomm_nonsquare.pdf", width = w_3gang_sep, height = h_3gang_sep_alt)
+#par(pty = "s", bty = "n")
+par(bty = "n")
+plot(density_poster, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster$y, density_lurker$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"
+)
+
+polygon(density_lurker$x, density_lurker$y, col=color_lurker_lt, border=NA)
+lines(density_poster, col=color_poster_offline, lwd=density_lwd, lty = density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Lurkers (Offline)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_lurker_lt, fill = color_lurker_lt, bottom_border = T)
+
+dev.off()
+
+###################
+
+pdf(file = "../results/triple_plot_sep_h4_polcomm_nonsquare.pdf", width = w_3gang_sep, height = h_3gang_sep_alt)
+#par(pty = "s", bty = "n")
+par(bty = "n")
+plot(density_poster_online, main="", xlab="Lexical Ideology", ylab="Density", xlim = c(-4,4),
+     #ylim=range(c(density_poster_online$y, density_poster_offline$y)),  # adjust y-axis limits
+     ylim=c(0,.6),
+     type="n"  # This will not plot anything but set up the coordinates.
+)
+
+polygon(density_poster_online$x, density_poster_online$y, col=color_poster_online_lt, border=NA)
+lines(density_poster_offline, col=color_poster_offline, lwd=density_lwd, lty=density_lty)
+
+par(xpd=T)
+legend("topright", legend = c("Posters (Offline)", "Posters (Online)"), col = "white", pch = 16, bty = "n", inset = inset)
+
+plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj, col = color_poster_offline, fill = NA, lty = density_lty)
+plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj, col = color_poster_online_lt, fill = color_poster_online_lt, bottom_border = T)
+
+dev.off()
+
+
+```
+
+# Tufte Plots
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 3)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h3, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Lurkers (Offline)"),
+             cols   = c(color_poster_offline, color_lurker_dk),
+             fills  = c(NA, color_lurker_lt))
+
+# plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj,
+#                   col = color_poster_offline, fill = NA)
+# plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj,
+#                   col = color_lurker_dk, fill = color_lurker_lt,
+#                   bottom_border = TRUE)
+dev.off()
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster_online, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h4, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c(NA, color_poster_online_lt))
+
+# plotMiniBellCurve(1, 2, .644+minibell_vadj, .669+minibell_vadj,
+#                   col = color_poster_offline, fill = NA)
+# plotMiniBellCurve(1, 2, .603+minibell_vadj, .628+minibell_vadj,
+#                   col = color_poster_online_dk, fill = color_poster_online_lt,
+#                   bottom_border = TRUE)
+dev.off()
+
+
+```
+
+
+
+
+# Even better Plots
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 3)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+## Overlay per-bin ratio of two distributions (A/B) over an existing plot
+## x_num: numeric vector for A (numerator); x_den: numeric vector for B (denominator)
+## breaks: histogram breaks used for both (choose to match your xlim)
+add_ratio_hist <- function(x_num, x_den,
+                           breaks = seq(-4, 4, by = 0.5),
+                           ylim_ratio = c(0, 2),
+                           stem_lwd = 6,
+                           stem_col = "black",
+                           fill_alpha = 0.10,
+                           axis_label = "Bin share ratio (A/B)") {
+  h_num <- hist(x_num, breaks = breaks, plot = FALSE)
+  h_den <- hist(x_den, breaks = breaks, plot = FALSE)
+
+  ## normalize to *shares* so sample size differences don't drive the ratio
+  p_num <- h_num$counts / sum(h_num$counts)
+  p_den <- h_den$counts / sum(h_den$counts)
+
+  eps <- 1e-12
+  ratio <- p_num / pmax(p_den, eps)
+  mids  <- h_num$mids
+  bw    <- diff(breaks)[1]
+
+  ## Overlay on a new right-axis coordinate system
+  par(new = TRUE)
+  plot(NA, NA,
+       xlim = range(breaks), ylim = ylim_ratio,
+       xlab = "", ylab = "", axes = FALSE, type = "n")
+
+  ## Optional faint fill bars (very light so densities remain legible)
+  rect(mids - bw/2, 0, mids + bw/2, pmin(ratio, ylim_ratio[2]),
+       border = NA, col = adjustcolor("black", alpha.f = fill_alpha))
+
+  ## Black “stems” to make the ratio visible in print
+  segments(mids, 0, mids, pmin(ratio, ylim_ratio[2]),
+           col = stem_col, lwd = stem_lwd)
+
+  ## Right axis + label
+  axis(4)
+  mtext(axis_label, side = 4, line = 2)
+}
+
+
+
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+```{r}
+hist_rat_bw = 1
+hist_rat_xmag = 4.5
+hist_rat_xlim = c(-hist_rat_xmag, hist_rat_xmag)
+
+```
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h3, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline)
+
+## choose breaks that match your xlim and data grain
+h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+add_ratio_hist(
+  x_num = d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha),
+  x_den = d_final %>% filter(!poster) %>% filter(platform_treatment==0) %>% pull(alpha),
+  breaks = h3_breaks,
+  ylim_ratio = c(0, 2),           # adjust if your ratios exceed 2
+  stem_lwd = 6,                    # keeps bold but not overpowering
+  stem_col = "black",
+  fill_alpha = 0.08,               # very light so curves read clearly
+  axis_label = "Share ratio (Posters/Lurkers)"
+)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Lurkers (Offline)"),
+             cols   = c(color_poster_offline, color_lurker_dk),
+             fills  = c(NA, color_lurker_lt))
+
+dev.off()
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster_online, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h4, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline)
+
+h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+add_ratio_hist(
+  x_num =  d_final %>% filter(poster) %>% filter(platform_treatment==1) %>% pull(alpha),
+  x_den =  d_final %>% filter(poster) %>% filter(platform_treatment==0) %>% pull(alpha),
+  breaks = h4_breaks,
+  ylim_ratio = c(0, 1.6),          # "flat" near 1 reads well here
+  stem_lwd = 6,
+  stem_col = "black",
+  fill_alpha = 0.08,
+  axis_label = "Share ratio (Online/Offline)"
+)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c(NA, color_poster_online_lt))
+
+dev.off()
+
+
+```
+
+
+
+# Even better plots 2
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 3)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+## Overlay per-bin ratio of two distributions (A/B) over an existing plot
+## x_num: numeric vector for A (numerator); x_den: numeric vector for B (denominator)
+## breaks: histogram breaks used for both (choose to match your xlim)
+## Overlay per-bin ratio of two distributions (A/B) over an existing plot
+## - No shaded fill
+## - Each bin drawn as a vertical stem at the integer mid AND a horizontal cap
+##   spanning exactly 1 unit (mid - 0.5 to mid + 0.5), aligned to integer centers.
+add_ratio_hist <- function(x_num, x_den,
+                           breaks = seq(-4.5, 4.5, by = 1),  # edges at .5 -> mids at integers
+                           ylim_ratio = c(0, 2),
+                           stem_lwd = 6,
+                           stem_col = "black",
+                           cap_lwd  = 2,                      # thinner horizontal caps
+                           axis_label = "Bin share ratio (A/B)") {
+  ## ensure mids are integers by forcing .5-spaced edges
+  if (abs(diff(breaks)[1] - 1) > .Machine$double.eps^0.5 ||
+      any(abs(breaks - round(breaks) - 0.5) > 1e-8)) {
+    rng <- range(c(x_num, x_den), finite = TRUE)
+    bmin <- floor(rng[1]) - 0.5
+    bmax <- ceiling(rng[2]) + 0.5
+    breaks <- seq(bmin, bmax, by = 1)
+  }
+
+  h_num <- hist(x_num, breaks = breaks, plot = FALSE)
+  h_den <- hist(x_den, breaks = breaks, plot = FALSE)
+
+  ## normalize to shares before ratio
+  p_num <- h_num$counts / sum(h_num$counts)
+  p_den <- h_den$counts / sum(h_den$counts)
+
+  eps   <- 1e-12
+  ratio <- p_num / pmax(p_den, eps)
+  mids  <- h_num$mids    # will be integers by construction
+  bw    <- diff(breaks)[1]  # = 1
+
+  ## Overlay on right axis
+  par(new = TRUE)
+  plot(NA, NA,
+       xlim = range(breaks), ylim = ylim_ratio,
+       xlab = "", ylab = "", axes = FALSE, type = "n")
+
+  ## Draw vertical stems (at integer mids)
+  yvals <- pmin(ratio, ylim_ratio[2])
+  segments(mids, 0, mids, yvals, col = stem_col, lwd = stem_lwd)
+
+  ## Draw horizontal caps spanning exactly one unit (bin width = 1)
+  segments(mids - bw/2, yvals, mids + bw/2, yvals, col = stem_col, lwd = cap_lwd)
+
+  ## Right axis
+  axis(4)
+  mtext(axis_label, side = 4, line = 2)
+}
+
+
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+```{r}
+# hist_rat_bw = 1
+# hist_rat_xmag = 4.5
+# hist_rat_xlim = c(-hist_rat_xmag, hist_rat_xmag)
+
+hist_rat_bw   <- 1
+hist_rat_xmag <- 4.5
+h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)  # -4.5..4.5
+h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+
+```
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h3, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline)
+
+## choose breaks that match your xlim and data grain
+#h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment == 0) %>% pull(alpha),
+  x_den = d_final %>% filter(!poster, platform_treatment == 0) %>% pull(alpha),
+  breaks = h3_breaks,
+  ylim_ratio = c(0, 2),
+  stem_lwd = 6,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Share ratio (Posters/Lurkers)"
+)
+
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Lurkers (Offline)"),
+             cols   = c(color_poster_offline, color_lurker_dk),
+             fills  = c(NA, color_lurker_lt))
+
+dev.off()
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster_online, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h4, type = "n")
+
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline)
+
+#h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment == 1) %>% pull(alpha),
+  x_den = d_final %>% filter(poster, platform_treatment == 0) %>% pull(alpha),
+  breaks = h4_breaks,
+  ylim_ratio = c(0, 1.6),
+  stem_lwd = 6,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Share ratio (Online/Offline)"
+)
+
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c(NA, color_poster_online_lt))
+
+dev.off()
+
+
+```
+
+
+
+
+
+
+# Even better plots 3
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 3)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+## Ratio overlay aligned to current plot:
+## - no shaded area
+## - unit-wide caps centered on integers
+## - x-scale taken from par('usr') of the existing plot
+add_ratio_hist <- function(x_num, x_den,
+                           breaks = NULL,            # if NULL, we derive integer-centered breaks from data & current xlim
+                           ylim_ratio = c(0, 2),
+                           stem_lwd = 6,
+                           stem_col = "black",
+                           cap_lwd  = 2,
+                           axis_label = "Bin share ratio (A/B)") {
+
+  ## Get current plot x-limits (so we align scales)
+  usr <- par("usr")          # c(xmin, xmax, ymin, ymax)
+  xlim_now <- usr[1:2]
+
+  ## Build integer-centered breaks (edges at n ± 0.5) spanning current xlim
+  if (is.null(breaks)) {
+    left  <- floor(xlim_now[1]) - 0.5
+    right <- ceiling(xlim_now[2]) + 0.5
+    breaks <- seq(left, right, by = 1)
+  } else {
+    ## Force them to be unit-width & .5-offset; if not, coerce to match xlim
+    if (abs(diff(breaks)[1] - 1) > .Machine$double.eps^0.5 ||
+        any(abs(breaks - round(breaks) - 0.5) > 1e-8)) {
+      left  <- floor(xlim_now[1]) - 0.5
+      right <- ceiling(xlim_now[2]) + 0.5
+      breaks <- seq(left, right, by = 1)
+    }
+  }
+
+  h_num <- hist(x_num, breaks = breaks, plot = FALSE)
+  h_den <- hist(x_den, breaks = breaks, plot = FALSE)
+
+  ## Normalize to shares before ratio
+  p_num <- h_num$counts / sum(h_num$counts)
+  p_den <- h_den$counts / sum(h_den$counts)
+
+  eps   <- 1e-12
+  ratio <- p_num / pmax(p_den, eps)
+  mids  <- h_num$mids   # integers by construction
+  bw    <- 1
+
+  ## Overlay on the SAME x-scale
+  par(new = TRUE)
+  plot(NA, NA,
+       xlim = xlim_now, ylim = ylim_ratio,
+       xlab = "", ylab = "", axes = FALSE, type = "n",
+       xaxs = "i", yaxs = "i")
+
+  yvals <- pmin(ratio, ylim_ratio[2])
+
+  ## Vertical stems at integer centers
+  segments(mids, 0, mids, yvals, col = stem_col, lwd = stem_lwd, lend = 1)
+
+  ## Horizontal caps spanning exactly one unit
+  segments(mids - bw/2, yvals, mids + bw/2, yvals, col = stem_col, lwd = cap_lwd, lend = 1)
+
+  ## Right axis
+  axis(4)
+  mtext(axis_label, side = 4, line = 2)
+}
+
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+```{r}
+# hist_rat_bw = 1
+# hist_rat_xmag = 4.5
+# hist_rat_xlim = c(-hist_rat_xmag, hist_rat_xmag)
+
+hist_rat_bw   <- 1
+hist_rat_xmag <- 4.5
+h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)  # -4.5..4.5
+h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+
+```
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+## exact x-scale, we’ll add our own integer ticks
+plot(density_poster, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h3, type = "n", xaxs = "i", xaxt = "n")
+
+## integer ticks aligned with histogram mids
+axis(1, at = seq(-4, 4, by = 1), labels = seq(-4, 4, by = 1))
+
+abline(v = 0, col = ref_col, lty = 3)
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline)
+
+## Breaks centered on integers across current xlim
+h3_breaks <- seq(-4.5, 4.5, by = 1)
+
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  x_den = d_final %>% filter(!poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h3_breaks,
+  ylim_ratio = c(0, 2),
+  stem_lwd = 6,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Share ratio (Posters/Lurkers)"
+)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Lurkers (Offline)"),
+             cols   = c(color_poster_offline, color_lurker_dk),
+             fills  = c(NA, color_lurker_lt))
+
+dev.off()
+
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+par_defaults()
+
+plot(density_poster_online, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-4, 4), ylim = ylim_h4, type = "n", xaxs = "i", xaxt = "n")
+
+axis(1, at = seq(-4, 4, by = 1), labels = seq(-4, 4, by = 1))
+
+abline(v = 0, col = ref_col, lty = 3)
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline)
+
+h4_breaks <- seq(-4.5, 4.5, by = 1)
+
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==1) %>% pull(alpha),
+  x_den = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h4_breaks,
+  ylim_ratio = c(0, 1.6),
+  stem_lwd = 6,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Share ratio (Online/Offline)"
+)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c(NA, color_poster_online_lt))
+
+dev.off()
+
+
+```
+
+
+
+# Even better plots 4
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 2)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+## Ratio overlay aligned to current plot:
+## - no shaded area
+## - unit-wide caps centered on integers
+## - x-scale taken from par('usr') of the existing plot
+add_ratio_hist <- function(x_num, x_den,
+                           breaks = NULL,            # if NULL, we derive integer-centered breaks from data & current xlim
+                           ylim_ratio = c(0, 2),
+                           stem_lwd = 6,
+                           stem_col = "black",
+                           cap_lwd  = 2,
+                           axis_label = "Bin share ratio (A/B)") {
+
+  ## Get current plot x-limits (so we align scales)
+  usr <- par("usr")          # c(xmin, xmax, ymin, ymax)
+  xlim_now <- usr[1:2]
+
+  ## Build integer-centered breaks (edges at n ± 0.5) spanning current xlim
+  if (is.null(breaks)) {
+    left  <- floor(xlim_now[1]) - 0.5
+    right <- ceiling(xlim_now[2]) + 0.5
+    breaks <- seq(left, right, by = 1)
+  } else {
+    ## Force them to be unit-width & .5-offset; if not, coerce to match xlim
+    if (abs(diff(breaks)[1] - 1) > .Machine$double.eps^0.5 ||
+        any(abs(breaks - round(breaks) - 0.5) > 1e-8)) {
+      left  <- floor(xlim_now[1]) - 0.5
+      right <- ceiling(xlim_now[2]) + 0.5
+      breaks <- seq(left, right, by = 1)
+    }
+  }
+
+  h_num <- hist(x_num, breaks = breaks, plot = FALSE)
+  h_den <- hist(x_den, breaks = breaks, plot = FALSE)
+
+  ## Normalize to shares before ratio
+  p_num <- h_num$counts / sum(h_num$counts)
+  p_den <- h_den$counts / sum(h_den$counts)
+
+  eps   <- 1e-12
+  ratio <- p_num / pmax(p_den, eps)
+  mids  <- h_num$mids   # integers by construction
+  bw    <- 1
+
+  ## Overlay on the SAME x-scale
+  par(new = TRUE)
+  plot(NA, NA,
+       xlim = xlim_now, ylim = ylim_ratio,
+       xlab = "", ylab = "", axes = FALSE, type = "n",
+       xaxs = "i", yaxs = "i")
+
+  yvals <- pmin(ratio, ylim_ratio[2])
+
+  ## Vertical stems at integer centers
+  segments(mids, 0, mids, yvals, col = stem_col, lwd = stem_lwd, lend = 1)
+
+  ## Horizontal caps spanning exactly one unit
+  segments(mids - bw/2, yvals, mids + bw/2, yvals, col = stem_col, lwd = cap_lwd, lend = 1)
+
+  ## Right axis
+  axis(4)
+  mtext(axis_label, side = 4, line = 3, las = 3)
+}
+
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Coefficient",
+     ylab = "Outspokenness Coefficient")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+```{r}
+hist_rat_bw   <- 1
+hist_rat_xmag <- 4.5
+h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)  # -4.5..4.5
+h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+dist_xmag = 4
+dist_xaxt_mag = 3
+
+black_lwd = 1.75
+stem_lwd = 3
+```
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+
+## Simple, plot-specific par: extra top & right margin
+par(bty = "n", las = 1, mar = c(4, 4, 3.5, 4))  # bottom, left, top, right
+
+plot(density_poster, main = "", xlab = "Lexical Ideology (Standard Deviations)", ylab = "Density",
+     xlim = c(-dist_xmag, dist_xmag), ylim = ylim_h3, type = "n", xaxs = "i", xaxt = "n")
+axis(1, at = seq(-dist_xaxt_mag, dist_xaxt_mag, by = 1))
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline, lwd = black_lwd)
+
+h3_breaks <- seq(-4.5, 4.5, by = 1)
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  x_den = d_final %>% filter(!poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h3_breaks,
+  ylim_ratio = c(0, 2),
+  stem_lwd = stem_lwd,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Density Ratio (Posters/Lurkers)"
+)
+
+abline(h = 0, col = "gray90", lwd = 1.5)
+
+## Legend in the title space
+par(xpd = NA)
+legend("top", inset = -0.25,
+       horiz = TRUE,
+       legend = c("Posters (Offline)", "Lurkers (Offline)"),
+       col = c(color_poster_offline, color_lurker_dk),
+       pt.bg = c(NA, color_lurker_lt), pch = 21, bty = "n", cex = 0.9)
+
+dev.off()
+
+
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+
+## Same margins: room above + room for right axis label
+par(bty = "n", las = 1, mar = c(4, 4, 3.5, 4))
+
+plot(density_poster_online, main = "", xlab = "Lexical Ideology", ylab = "Density",
+     xlim = c(-dist_xmag, dist_xmag), ylim = ylim_h4, type = "n", xaxs = "i", xaxt = "n")
+axis(1, at = seq(-dist_xaxt_mag, dist_xaxt_mag, by = 1))
+abline(v = 0, col = ref_col, lty = 3)
+
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline, lwd = black_lwd)
+
+h4_breaks <- seq(-4.5, 4.5, by = 1)
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==1) %>% pull(alpha),
+  x_den = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h4_breaks,
+  ylim_ratio = c(0, 1.6),
+  stem_lwd = stem_lwd,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Density Ratio (Online/Offline)"
+)
+
+par(xpd = NA)
+legend("top", inset = -0.25, horiz = TRUE,
+       legend = c("Posters (Offline)", "Posters (Online)"),
+       col = c(color_poster_offline, color_poster_online_dk),
+       pt.bg = c(NA, color_poster_online_lt), pch = 21, bty = "n", cex = 0.9)
+
+dev.off()
+
+
+```
+
+
+# Even better plots 5
+
+```{r}
+## Okabe–Ito palette (colorblind safe)
+oi <- list(
+  black          = "#000000",
+  blue           = "#0072B2",
+  sky            = "#56B4E9",
+  vermilion      = "#D55E00"
+)
+
+## Assign roles
+color_poster_offline   <- oi$black
+color_poster_online_dk <- oi$blue
+color_poster_online_lt <- adjustcolor(oi$sky, alpha.f = 0.40)
+color_lurker_dk        <- oi$vermilion
+color_lurker_lt        <- adjustcolor(oi$vermilion, alpha.f = 0.30)
+
+## Reference lines in black
+ref_col <- "black"
+
+## Reset to base R defaults for spacing/weights
+par_defaults <- function(square = FALSE) {
+  par(
+    bty = "n",
+    las = 1,
+    pty = if (square) "s" else "m"
+  )
+}
+
+draw_origin <- function() {
+  abline(h = 0, v = 0, col = ref_col, lty = 2)
+}
+
+draw_ci <- function(x, y, xlo, xhi, ylo, yhi, col) {
+  arrows(x0 = xlo, y0 = y, x1 = xhi, y1 = y,
+         angle = 90, code = 3, length = 0.04, col = col)
+  arrows(x0 = x, y0 = ylo, x1 = x, y1 = yhi,
+         angle = 90, code = 3, length = 0.04, col = col)
+}
+
+quiet_legend <- function(x, labels, cols, fills, pch = 21, inset = c(-.12, 0)) {
+  par(xpd = NA)
+  legend(
+    x, legend = labels,
+    pt.bg = fills, col = cols, pch = pch, bty = "n",
+    inset = inset, pt.cex = 1, cex = 0.9
+  )
+}
+
+```
+
+
+```{r}
+## Ratio overlay aligned to current plot:
+## - no shaded area
+## - unit-wide caps centered on integers
+## - x-scale taken from par('usr') of the existing plot
+add_ratio_hist <- function(x_num, x_den,
+                           breaks = NULL,            # if NULL, we derive integer-centered breaks from data & current xlim
+                           ylim_ratio = c(0, 2),
+                           stem_lwd = 6,
+                           stem_col = "black",
+                           cap_lwd  = 2,
+                           axis_label = "Bin share ratio (A/B)") {
+
+  ## Get current plot x-limits (so we align scales)
+  usr <- par("usr")          # c(xmin, xmax, ymin, ymax)
+  xlim_now <- usr[1:2]
+
+  ## Build integer-centered breaks (edges at n ± 0.5) spanning current xlim
+  if (is.null(breaks)) {
+    left  <- floor(xlim_now[1]) - 0.5
+    right <- ceiling(xlim_now[2]) + 0.5
+    breaks <- seq(left, right, by = 1)
+  } else {
+    ## Force them to be unit-width & .5-offset; if not, coerce to match xlim
+    if (abs(diff(breaks)[1] - 1) > .Machine$double.eps^0.5 ||
+        any(abs(breaks - round(breaks) - 0.5) > 1e-8)) {
+      left  <- floor(xlim_now[1]) - 0.5
+      right <- ceiling(xlim_now[2]) + 0.5
+      breaks <- seq(left, right, by = 1)
+    }
+  }
+
+  h_num <- hist(x_num, breaks = breaks, plot = FALSE)
+  h_den <- hist(x_den, breaks = breaks, plot = FALSE)
+
+  ## Normalize to shares before ratio
+  p_num <- h_num$counts / sum(h_num$counts)
+  p_den <- h_den$counts / sum(h_den$counts)
+
+  eps   <- 1e-12
+  ratio <- p_num / pmax(p_den, eps)
+  mids  <- h_num$mids   # integers by construction
+  bw    <- 1
+
+  ## Overlay on the SAME x-scale
+  par(new = TRUE)
+  plot(NA, NA,
+       xlim = xlim_now, ylim = ylim_ratio,
+       xlab = "", ylab = "", axes = FALSE, type = "n",
+       xaxs = "i", yaxs = "i")
+
+  yvals <- pmin(ratio, ylim_ratio[2])
+
+  ## Vertical stems at integer centers
+  segments(mids, 0, mids, yvals, col = stem_col, lwd = stem_lwd, lend = 1)
+
+  ## Horizontal caps spanning exactly one unit
+  segments(mids - bw/2, yvals, mids + bw/2, yvals, col = stem_col, lwd = cap_lwd, lend = 1)
+
+  ## Right axis
+  axis(4)
+  mtext(axis_label, side = 4, line = 3, las = 3)
+}
+
+
+```
+
+
+```{r}
+twod_coefplot_xlim <- 0.5
+pdf("../results/triple_plot_sep_h12_polcomm_square.pdf",
+    width = w_3gang_sep, height = h_3gang_sep)
+
+par_defaults(square = TRUE)
+
+plot(NA, NA,
+     xlim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     ylim = c(-twod_coefplot_xlim, twod_coefplot_xlim),
+     xlab = "Lexical Ideology Effect\n   <-  Leftward Falsification  |  Rightward Falsification. ->",
+     ylab = "Outspokenness Effect\n<-  Less Outspoken  |  More Outspoken ->")
+
+draw_origin()
+
+x   <- unname(mod_h2_pooled_ks$coefficients["platform_treatment"])
+y   <- unname(mod_h1_pooled_ks$coefficients["platform_treatment"])
+xlo <- unname(mod_h2_pooled_ks$conf.low["platform_treatment"])
+xhi <- unname(mod_h2_pooled_ks$conf.high["platform_treatment"])
+ylo <- unname(mod_h1_pooled_ks$conf.low["platform_treatment"])
+yhi <- unname(mod_h1_pooled_ks$conf.high["platform_treatment"])
+
+draw_ci(x, y, xlo, xhi, ylo, yhi, col = color_poster_online_dk)
+
+points(0, 0, pch = 21, col = color_poster_offline, bg = "white", cex = 1.2)
+points(x, y, pch = 21, col = color_poster_online_dk,
+       bg = color_poster_online_dk, cex = 1.2)
+
+quiet_legend("topright",
+             labels = c("Posters (Offline)", "Posters (Online)"),
+             cols   = c(color_poster_offline, color_poster_online_dk),
+             fills  = c("white", color_poster_online_dk))
+dev.off()
+
+```
+
+```{r}
+hist_rat_bw   <- 1
+hist_rat_xmag <- 4.5
+h3_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)  # -4.5..4.5
+h4_breaks <- seq(-hist_rat_xmag, hist_rat_xmag, by = hist_rat_bw)
+
+dist_xmag = 3.75
+dist_xaxt_mag = 3
+
+black_lwd = 1.75
+stem_lwd = 3
+```
+
+
+```{r}
+ylim_h3 <- c(0, max(c(density_poster$y, density_lurker$y))*1.05)
+pdf("../results/triple_plot_sep_h3_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+
+## Simple, plot-specific par: extra top & right margin
+par(bty = "n", las = 1, mar = c(4, 4, 3.5, 4))  # bottom, left, top, right
+
+## H3 figure
+plot(density_poster,
+     main = "",
+     xlab = "Lexical Ideology (Standard Deviations)",
+     ylab = "Density",
+     xlim = c(-dist_xmag, dist_xmag),
+     ylim = ylim_h3,
+     type = "n",
+     xaxs = "i",
+     yaxs = "i",          # <-- add this
+     xaxt = "n")
+
+axis(1, at = seq(-dist_xaxt_mag, dist_xaxt_mag, by = 1))
+
+polygon(density_lurker$x, density_lurker$y, col = color_lurker_lt, border = NA)
+lines(density_poster, col = color_poster_offline, lwd = black_lwd)
+
+h3_breaks <- seq(-4.5, 4.5, by = 1)
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  x_den = d_final %>% filter(!poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h3_breaks,
+  ylim_ratio = c(0, 2),
+  stem_lwd = stem_lwd,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Density Ratio (Posters/Lurkers)"
+)
+
+## Legend in the title space
+par(xpd = NA)
+segments(x0 = -dist_xmag, x1 = dist_xmag, y0 = 0, col = ref_col, lty = 1)
+# legend("top", inset = -0.25,
+#        horiz = TRUE,
+#        legend = c("Posters (Offline)", "Lurkers (Offline)"),
+#        col = c(color_poster_offline, color_lurker_dk),
+#        pt.bg = c(NA, color_lurker_lt), pch = 21, bty = "n", cex = 0.9)
+
+par(xpd = NA)                       # allow drawing in the margin
+usr <- par("usr")
+xmid <- mean(usr[1:2])
+ytop <- usr[4] + 0.07*diff(usr[3:4])  # ~7% plot height above the top; tweak as needed
+legend(x = xmid+1, y = ytop, xjust = 0.5, yjust = 0,   # center over the plot
+       horiz = TRUE,
+       legend = c("Posters (Offline)", "Lurkers (Offline)", "Ratio"),
+       col    = c(color_poster_offline,  color_lurker_dk, "black"),
+       pt.bg  = c(NA,                    color_lurker_lt, NA),
+       pch    = c(21, 21, 124),
+       pt.cex = c(1,  1,  1.4),
+       lty    = c(0,  0,  0),
+       lwd    = c(NA, NA, NA),
+       bty    = "n", cex = 0.9,
+       x.intersp = 0.25,
+       text.width = max(strwidth(c("Posters (Offline)",
+                                   "Lurkers (Offline)",
+                                   "Ratio"))) * 1.1)
+
+dev.off()
+
+
+```
+
+
+```{r}
+ylim_h4 <- c(0, max(c(density_poster_online$y, density_poster_offline$y))*1.05)
+pdf("../results/triple_plot_sep_h4_polcomm_nonsquare.pdf",
+    width = w_3gang_sep, height = h_3gang_sep_alt)
+
+## Same margins: room above + room for right axis label
+par(bty = "n", las = 1, mar = c(4, 4, 3.5, 4))
+
+## H4 figure
+plot(density_poster_online,
+     main = "",
+     xlab = "Lexical Ideology (Standard Deviations)",
+     ylab = "Density",
+     xlim = c(-dist_xmag, dist_xmag),
+     ylim = ylim_h4,
+     type = "n",
+     xaxs = "i",
+     yaxs = "i",          # <-- add this
+     xaxt = "n")
+
+axis(1, at = seq(-dist_xaxt_mag, dist_xaxt_mag, by = 1))
+
+polygon(density_poster_online$x, density_poster_online$y,
+        col = color_poster_online_lt, border = NA)
+lines(density_poster_offline, col = color_poster_offline, lwd = black_lwd)
+
+h4_breaks <- seq(-4.5, 4.5, by = 1)
+add_ratio_hist(
+  x_num = d_final %>% filter(poster, platform_treatment==1) %>% pull(alpha),
+  x_den = d_final %>% filter(poster, platform_treatment==0) %>% pull(alpha),
+  breaks = h4_breaks,
+  ylim_ratio = c(0, 2),
+  stem_lwd = stem_lwd,
+  stem_col = "black",
+  cap_lwd  = NA,
+  axis_label = "Density Ratio (Online/Offline)"
+)
+
+par(xpd = NA)
+segments(x0 = -dist_xmag, x1 = dist_xmag, y0 = 0, col = ref_col, lty = 1)
+# legend("top", inset = -0.25, horiz = TRUE,
+#        legend = c("Posters (Offline)", "Posters (Online)"),
+#        col = c(color_poster_offline, color_poster_online_dk),
+#        pt.bg = c(NA, color_poster_online_lt), pch = 21, bty = "n", cex = 0.9)
+
+par(xpd = NA)                       # allow drawing in the margin
+usr <- par("usr")
+xmid <- mean(usr[1:2])
+ytop <- usr[4] + 0.07*diff(usr[3:4])  # ~7% plot height above the top; tweak as needed
+legend(x = xmid+1, y = ytop, xjust = 0.5, yjust = 0,   # center over the plot
+       horiz = TRUE,
+       legend = c("Posters (Offline)", "Posters (Online)", "Ratio"),
+       col    = c(color_poster_offline,  color_poster_online_dk, "black"),
+       pt.bg  = c(NA,                    color_poster_online_lt, NA),
+       pch    = c(21, 21, 124),
+       pt.cex = c(1,  1,  1.4),
+       lty    = c(0,  0,  0),
+       lwd    = c(NA, NA, NA),
+       bty    = "n", cex = 0.9,
+       x.intersp = 0.25,
+       text.width = max(strwidth(c("Posters (Offline)",
+                                   "Posters (Online)",
+                                   "Ratio"))) * 1.1)
+
+
+
+
+
+
+
+dev.off()
+
+
+```
+
+
+
+# Tables
+
+```{r}
+library(texreg)
+
+include.ci = FALSE
+single.row = T
+float.pos = "h!"
+tabular = F
+table = F
+
+```
+
+
+## H1 and H2
+
+```{r}
+# H1 H2 pre-reg only
+
+# mod_h1_pooled_ks <- estimatr::lm_robust(beta ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+# (mod_h1_pooled_ks$p.value['platform_treatment']/2) < .00001
+# 
+# mod_h2_pooled_ks <- estimatr::lm_robust(alpha ~ platform_treatment + age_dec + IDEO + PartyID7 + college + poc + male, data = d_final %>% filter(poster), se_type = "HC2")
+# (mod_h2_pooled_ks$p.value['platform_treatment']/2) < .05 #p=.36
+
+texreg(list("Outspokenness" = mod_h1_pooled_ks, "Lexical Ideology" = mod_h2_pooled_ks),
+       custom.coef.names = c("Intercept", "Platform Treatment", "Age (Decades)", "5-Point Ideology", "7-Point Partisanship", "College", "POC", "Male"),
+       include.ci = include.ci,
+       single.row = single.row,
+       float.pos = float.pos,
+       tabular = tabular,
+       table = table,
+       file = "../results/ch3_h12_pooled.tex",
+       label = "tab:ch3_h12_pooled",
+       caption = "Platform Treatment Effects"
+       )
+```
+
+
+```{r}
+#
+texreg(list("Pooled" = mod_h1_pooled_ks, "Facebook" = mod_h1_fb, "Twitter" = mod_h1_tw),
+       custom.coef.names = c("Intercept", "Platform Treatment", "Age (Decades)", "5-Point Ideology", "7-Point Partisanship", "College", "POC", "Male"),
+       include.ci = include.ci,
+       single.row = single.row,
+       float.pos = float.pos,
+       tabular = tabular,
+       table = table,
+       file = "../results/ch3_h1_ptf.tex",
+       label = "tab:ch3_h1_ptf",
+       caption = "Platform Treatment Effects: Outspokenness (H1)"
+)
+
+
+texreg(list("Pooled" = mod_h2_pooled_ks, "Facebook" = mod_h2_fb, "Twitter" = mod_h2_tw),
+       custom.coef.names = c("Intercept", "Platform Treatment", "Age (Decades)", "5-Point Ideology", "7-Point Partisanship", "College", "POC", "Male"),
+       include.ci = include.ci,
+       single.row = single.row,
+       float.pos = float.pos,
+       tabular = tabular,
+       table = table,
+       file = "../results/ch3_h2_ptf.tex",
+       label = "tab:ch3_h2_ptf",
+       caption = "Platform Treatment Effects: Lexical Ideology (H2)"
+)
+
+#mod_h2_pooled_ks
+```
+
+
+
+```{r}
+# H1 with int relsim
+
+texreg(list("Pooled" = mod_h1_pooled_ks, "Facebook" = mod_h1_fb, "Twitter" = mod_h1_tw, "$\\times$ Likemindedness" = mod_h1_int_relsim_adj),
+       custom.coef.names = c("Intercept", "Platform Treatment", "Age (Decades)", "5-Point Ideology", "7-Point Partisanship", "College", "POC", "Male", "Likemindedness", "Platform Treatment \\\\ $\\times$ Likemindedness"),
+       include.ci = include.ci,
+       single.row = single.row,
+       float.pos = float.pos,
+       tabular = tabular,
+       table = table,
+       file = "../results/ch3_h1_ptfr.tex",
+       label = "tab:ch3_h1_ptfr",
+       caption = "Platform Treatment Effects: Outspokenness (H1)"
+)
+
+#mod_h2_pooled_ks
+```
+
+
+```{r}
+# likemindedness subset analyses
+
+d_final %>% filter(poster)
+d_final %>% filter(poster) %>% filter(relsim_trin<0) %>% nrow
+d_final %>% filter(poster) %>% filter(relsim_trin==0) %>% nrow
+d_final %>% filter(poster) %>% filter(relsim_trin>0) %>% nrow
+
+n_poster <- d_final %>% filter(poster) %>% filter(!is.na(relsim_trin)) %>% nrow()
+
+n_relsim_off <- d_final %>% filter(poster) %>% filter(relsim_trin<0) %>% nrow
+n_relsim_sim <- d_final %>% filter(poster) %>% filter(relsim_trin==0) %>% nrow
+n_relsim_on <- d_final %>% filter(poster) %>% filter(relsim_trin>0) %>% nrow
+
+prop_relsim_off <- n_relsim_off/n_poster
+prop_relsim_sim <- n_relsim_sim/n_poster
+prop_relsim_on <- n_relsim_on/n_poster
+
+prop_relsim_off+prop_relsim_sim+prop_relsim_on
+
+prop_relsim_off %>% round(2) %>% {.*100} %>% paste0(.,"\\%") %>% writeLines(., "../results/prop_relsim_off.txt")
+prop_relsim_sim %>% round(2) %>% {.*100} %>% paste0(.,"\\%") %>% writeLines(., "../results/prop_relsim_sim.txt")
+prop_relsim_on %>% round(2) %>% {.*100} %>% paste0(.,"\\%") %>% writeLines(., "../results/prop_relsim_on.txt")
+
+
+texreg(list("Offline > Online" = mod_h1_sub_relsim_trin_lo_adj, "Offline = Online" = mod_h1_sub_relsim_trin_0_adj, "Offline < Online" = mod_h1_sub_relsim_trin_hi_adj),
+       custom.coef.names = c("Intercept", "Platform Treatment", "Age (Decades)", "5-Point Ideology", "7-Point Partisanship", "College", "POC", "Male"),
+       include.ci = include.ci,
+       single.row = single.row,
+       float.pos = float.pos,
+       tabular = tabular,
+       table = table,
+       file = "../results/ch3_h1_relsim_subsets.tex",
+       label = "tab:ch3_h1_relsim_subsets",
+       caption = "Platform Treatment Effect Heterogeneities: Outspokenness $\\times$ Relative Likemindedeness"
+)
+
+```
+
